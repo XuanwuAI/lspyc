@@ -79,7 +79,7 @@ class MutilLangClient:
     def __init__(
         self,
         workspace_root: str,
-        language_factories: Mapping[str, HandleFactory],
+        language_factories: Mapping[str, HandleFactory] = DEFAULT_NATIVE_FACTORIES,
     ) -> None:
         """Initialize the LSP manager for a workspace.
 
@@ -184,18 +184,31 @@ class MutilLangClient:
         """
         # TODO: adjust root uri if needed
 
+        root_uri = self._path_to_uri(self.workspace_root)
+
         try:
             # Send initialize request
             init_params = {
                 "processId": os.getpid(),
-                "rootUri": self._path_to_uri(self.workspace_root),
+                "rootUri": root_uri,
                 "rootPath": self.workspace_root,
+                "workspaceFolders": [
+                    {
+                        "uri": root_uri,
+                        "name": os.path.basename(self.workspace_root),
+                    }
+                ],
                 "capabilities": {
                     "textDocument": {
-                        "definition": {"linkSupport": True},
+                        # "definition": {"linkSupport": True},  # Could include different resp format
+                        "definition": {},
                         "references": {},
                         "documentSymbol": {"hierarchicalDocumentSymbolSupport": True},
-                    }
+                    },
+                    "workspace": {
+                        "workspaceFolders": True,
+                        "symbol": {"dynamicRegistration": True},
+                    },
                 },
             }
 

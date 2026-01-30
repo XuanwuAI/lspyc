@@ -254,6 +254,42 @@ class MutilLangClient:
             except Exception as e:
                 raise RuntimeError(f"Failed to validate {language} factory: {e}") from e
 
+    async def open_document(self, file_path: str, content: str | None = None) -> None:
+        """Open a document in the LSP server.
+
+        Some language servers (like TypeScript) require files to be explicitly opened
+        before they can provide symbols and other information.
+
+        Args:
+            file_path: Path to the file (absolute or relative to workspace)
+            content: Optional file content. If None, reads from file system
+
+        Raises:
+            ValueError: If the file type is not supported
+            RuntimeError: If the operation fails
+            FileNotFoundError: If file doesn't exist and content is not provided
+        """
+        handle, abs_path = await self._get_handle_for_file(file_path)
+
+        # Read file content if not provided
+        if content is None:
+            with open(abs_path, "r", encoding="utf-8") as f:
+                content = f.read()
+
+        language = self._detect_language(file_path)
+
+        await handle.send_notification(
+            method="textDocument/didOpen",
+            params={
+                "textDocument": {
+                    "uri": self._path_to_uri(abs_path),
+                    "languageId": language,
+                    "version": 1,
+                    "text": content,
+                }
+            },
+        )
+
     async def get_document_symbols(self, file_path: str) -> list[dict[str, Any]]:
         """Get document symbols for a file.
 

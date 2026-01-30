@@ -110,18 +110,7 @@ class NativeHandleFactory(HandleFactory):
         if not is_valid:
             raise RuntimeError(f"Cannot create handle: {error}")
 
-        # Create a dynamic subclass of LspStdioHandle
-        class DynamicStdioHandle(LspStdioHandle):
-            def __init__(
-                self, command: list[str], cwd: str | None, env: dict[str, str] | None
-            ):
-                self._command = command
-                super().__init__(cwd=cwd, env=env)
-
-            def get_launch_command(self) -> list[str]:
-                return self._command
-
-        return DynamicStdioHandle(self.command, self.cwd, self.env)
+        return LspStdioHandle(cmd=self.command, cwd=self.cwd, env=self.env)
 
 
 class DockerHandleFactory(HandleFactory):
@@ -246,16 +235,7 @@ class DockerHandleFactory(HandleFactory):
         docker_command.append(self.image)
         docker_command.extend(self.command)
 
-        # Create a dynamic subclass of LspStdioHandle
-        class DynamicDockerHandle(LspStdioHandle):
-            def __init__(self, command: list[str], cwd: str | None):
-                self._command = command
-                super().__init__(cwd=cwd, env=None)
-
-            def get_launch_command(self) -> list[str]:
-                return self._command
-
-        return DynamicDockerHandle(docker_command, self.workspace_path)
+        return LspStdioHandle(cmd=docker_command, cwd=self.workspace_path, env=None)
 
 
 class WebSocketHandleFactory(HandleFactory):

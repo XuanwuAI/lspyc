@@ -15,14 +15,6 @@ THIS_FILE = __file__
 PROJ_DIR = os.path.dirname(os.path.dirname(THIS_FILE))
 
 
-class PyrightHandle(LspStdioHandle):
-    """Example implementation for the Pyright language server handle."""
-
-    def get_launch_command(self) -> list[str]:
-        """Return the command to launch Pyright LSP server."""
-        return ["pyright-langserver", "--stdio"]
-
-
 async def example_message_handler(message: JsonRpcMessage) -> None:
     """Example handler for incoming server messages."""
     content = message.content
@@ -36,7 +28,10 @@ async def example_message_handler(message: JsonRpcMessage) -> None:
 async def main() -> None:
     """Main example demonstrating LSP server usage."""
     # Create server instance
-    server = PyrightHandle(cwd=PROJ_DIR)
+    server = LspStdioHandle(
+        cmd=["pyright-langserver", "--stdio"],
+        cwd=PROJ_DIR,
+    )
 
     # Add message handler to receive notifications and requests
     server.add_message_handler(example_message_handler)

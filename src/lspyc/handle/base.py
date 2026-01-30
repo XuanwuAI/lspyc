@@ -246,39 +246,32 @@ class LspHandle(ABC):
         self._pending_responses.clear()
 
 
-class LspStdioHandle(LspHandle, ABC):
-    """Abstract base class for LSP servers communicating via stdio.
+class LspStdioHandle(LspHandle):
+    """Base class for LSP servers communicating via stdio.
 
-    Subclasses must implement get_launch_command() to specify the server command.
     The class handles process lifecycle, message encoding/decoding, and
     request/response correlation via the stdio transport.
     """
 
     def __init__(
         self,
+        cmd: list[str],
         cwd: str | None = None,
         env: dict[str, str] | None = None,
     ) -> None:
         """Initialize the LSP server.
 
         Args:
+            cmd: Command and arguments to launch the LSP server
             cwd: Working directory for the server process
             env: Environment variables for the server process
         """
         super().__init__()
+        self._cmd = cmd
         self._process: ProcessManager | None = None
         self._cwd = cwd
         self._env = env
         self._buffer = b""
-
-    @abstractmethod
-    def get_launch_command(self) -> list[str]:
-        """Get the command to launch the LSP server.
-
-        Returns:
-            List containing the command and its arguments
-        """
-        pass
 
     async def start(self) -> None:
         """Start the LSP server process.
@@ -290,8 +283,7 @@ class LspStdioHandle(LspHandle, ABC):
         if self._process is not None and self._process.is_running:
             raise RuntimeError("Server is already running")
 
-        command = self.get_launch_command()
-        self._process = ProcessManager(command, cwd=self._cwd, env=self._env)
+        self._process = ProcessManager(self._cmd, cwd=self._cwd, env=self._env)
 
         await self._process.start(
             on_stdout=self._on_stdout,

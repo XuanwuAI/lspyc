@@ -10,9 +10,8 @@ class ServerState(Enum):
     """LSP server process states."""
 
     STOPPED = "stopped"
-    STARTING = "starting"
+    WAITING = "waiting"
     RUNNING = "running"
-    STOPPING = "stopping"
 
 
 class ProcessManager:
@@ -43,7 +42,7 @@ class ProcessManager:
         if self.state != ServerState.STOPPED:
             raise RuntimeError(f"Cannot start server in state: {self.state}")
 
-        self.state = ServerState.STARTING
+        self.state = ServerState.WAITING
         self._shutdown_event = asyncio.Event()
 
         try:
@@ -72,10 +71,8 @@ class ProcessManager:
 
     async def stop(self, timeout: float = 5.0) -> None:
         """Stop the server process gracefully."""
-        if self.state not in (ServerState.RUNNING, ServerState.STARTING):
+        if self.state not in (ServerState.RUNNING, ServerState.WAITING):
             raise RuntimeError(f"Cannot stop server in state: {self.state}")
-
-        self.state = ServerState.STOPPING
 
         if self.process is None:
             self._cleanup()

@@ -7,7 +7,9 @@ authors = [
     { email = "zhanpengliu@tencent.com" }
 ]
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "websockets>=16.0",
+]
 
 [build-system]
 requires = ["uv_build>=0.8.0,<0.9"]

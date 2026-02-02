@@ -1,7 +1,9 @@
 """Abstract base class for LSP server handle."""
 
 import asyncio
+import os
 from abc import ABC, abstractmethod
+from pathlib import Path
 from typing import Any, Awaitable, Callable, TypeAlias
 
 from .process import ProcessManager, ServerState
@@ -21,18 +23,23 @@ class LspHandle(ABC):
 
     def __init__(
         self,
+        workspace_root: str,
         request_handler: INBOUND_HANDLER | None = None,
         notification_handler: INBOUND_HANDLER | None = None,
     ) -> None:
-        """Initialize the LSP handle."""
+        self._workspace_root = workspace_root
+        self._server_capabilities: dict[str, Any] | None = None
         self._next_id = 1
         self._pending_responses: dict[int | str, asyncio.Future[Any]] = {}
         self.request_handler: INBOUND_HANDLER | None = request_handler
         self.notification_handler: INBOUND_HANDLER | None = notification_handler
 
     @abstractmethod
-    async def start(self) -> None:
+    async def start(self) -> dict[str, Any] | None:
         """Start the LSP server/connection.
+
+        Returns:
+            Server capabilities if auto-initialized, None otherwise
 
         Raises:
             RuntimeError: If the server is already running
@@ -187,6 +194,70 @@ class LspHandle(ABC):
 
         await self._send_raw_message(message)
 
+    async def initialize(
+        self,
+        workspace_root: str,
+        timeout: float = 30.0,
+    ) -> dict[str, Any]:
+        """Initialize the LSP server with workspace configuration.
+
+        This method performs the LSP initialize/initialized handshake with the server.
+        It should be called after start() and before sending any other requests.
+
+        Args:
+            workspace_root: Absolute path to workspace root directory
+            timeout: Timeout for initialization request in seconds
+
+        Returns:
+            Server capabilities from initialize response
+
+        Raises:
+            RuntimeError: If handle is not running or initialization fails
+        """
+        if not self.is_running:
+            raise RuntimeError("Server is not running")
+
+        # Convert workspace root to URI
+        root_uri = Path(workspace_root).as_uri()
+
+        # Construct initialization parameters
+        init_params = {
+            "processId": os.getpid(),
+            "rootUri": root_uri,
+            "rootPath": workspace_root,
+            "workspaceFolders": [
+                {
+                    "uri": root_uri,
+                    "name": os.path.basename(workspace_root),
+                }
+            ],
+            "capabilities": {
+                "textDocument": {
+                    "definition": {},
+                    "references": {},
+                    "documentSymbol": {"hierarchicalDocumentSymbolSupport": True},
+                },
+                "workspace": {
+                    "workspaceFolders": True,
+                    "symbol": {"dynamicRegistration": True},
+                },
+                "window": {"workDoneProgress": True},
+            },
+        }
+
+        # Send initialize request
+        result = await self.send_request(
+            method="initialize",
+            params=init_params,
+            timeout=timeout,
+        )
+
+        # Send initialized notification
+        await self.send_notification(method="initialized", params={})
+
+        # Return server capabilities
+        return result if result else {}
+
     async def _handle_message(self, message: JsonRpcMessage) -> None:
         """Handle an incoming message.
 
@@ -243,6 +314,7 @@ class LspStdioHandle(LspHandle):
     def __init__(
         self,
         cmd: list[str],
+        workspace_root: str,
         cwd: str | None = None,
         env: dict[str, str] | None = None,
     ) -> None:
@@ -250,18 +322,22 @@ class LspStdioHandle(LspHandle):
 
         Args:
             cmd: Command and arguments to launch the LSP server
+            workspace_root: workspace root for automatic initialization
             cwd: Working directory for the server process
             env: Environment variables for the server process
         """
-        super().__init__()
+        super().__init__(workspace_root=workspace_root)
         self._cmd = cmd
         self._process: ProcessManager | None = None
         self._cwd = cwd
         self._env = env
         self._buffer = b""
 
-    async def start(self) -> None:
+    async def start(self) -> dict[str, Any] | None:
         """Start the LSP server process.
+
+        Returns:
+            Server capabilities if auto-initialized, None otherwise
 
         Raises:
             RuntimeError: If the server is already running
@@ -276,6 +352,10 @@ class LspStdioHandle(LspHandle):
             on_stdout=self._on_stdout,
             on_stderr=self._on_stderr,
         )
+
+        capabilities = await self.initialize(workspace_root=self._workspace_root)
+        self._server_capabilities = capabilities
+        return capabilities
 
     async def stop(self, timeout: float = 5.0) -> None:
         """Stop the LSP server process.

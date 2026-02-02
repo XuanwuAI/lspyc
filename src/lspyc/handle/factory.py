@@ -31,17 +31,7 @@ class HandleFactory(ABC):
         pass
 
     @abstractmethod
-    async def create(self) -> LspHandle:
-        """Create and return an LSP handle instance.
-
-        Should only be called after validate() returns True.
-
-        Returns:
-            Configured LSP handle instance
-
-        Raises:
-            RuntimeError: If validation failed or creation is not possible
-        """
+    async def create(self, workspace_root: str) -> LspHandle:
         pass
 
 
@@ -97,20 +87,17 @@ class NativeHandleFactory(HandleFactory):
 
         return True, None
 
-    async def create(self) -> LspHandle:
-        """Create a native stdio handle.
-
-        Returns:
-            LspStdioHandle instance configured with the command
-
-        Raises:
-            RuntimeError: If validation fails
-        """
+    async def create(self, workspace_root: str) -> LspHandle:
         is_valid, error = await self.validate()
         if not is_valid:
             raise RuntimeError(f"Cannot create handle: {error}")
 
-        return LspStdioHandle(cmd=self.command, cwd=self.cwd, env=self.env)
+        return LspStdioHandle(
+            cmd=self.command,
+            cwd=self.cwd,
+            env=self.env,
+            workspace_root=workspace_root,
+        )
 
 
 class DockerHandleFactory(HandleFactory):
@@ -124,7 +111,6 @@ class DockerHandleFactory(HandleFactory):
         self,
         image: str,
         command: list[str],
-        workspace_path: str,
         container_workspace: str = "/workspace",
         additional_mounts: dict[str, str] | None = None,
     ) -> None:
@@ -141,12 +127,9 @@ class DockerHandleFactory(HandleFactory):
             raise ValueError("Docker image cannot be empty")
         if not command or not command[0]:
             raise ValueError("Command cannot be empty")
-        if not workspace_path:
-            raise ValueError("Workspace path cannot be empty")
 
         self.image = image
         self.command = command
-        self.workspace_path = workspace_path
         self.container_workspace = container_workspace
         self.additional_mounts = additional_mounts or {}
 
@@ -202,15 +185,7 @@ class DockerHandleFactory(HandleFactory):
 
         return True, None
 
-    async def create(self) -> LspHandle:
-        """Create a docker-based stdio handle.
-
-        Returns:
-            LspStdioHandle instance configured with docker command
-
-        Raises:
-            RuntimeError: If validation fails
-        """
+    async def create(self, workspace_root: str) -> LspHandle:
         is_valid, error = await self.validate()
         if not is_valid:
             raise RuntimeError(f"Cannot create handle: {error}")
@@ -222,7 +197,7 @@ class DockerHandleFactory(HandleFactory):
             "-i",  # Interactive mode for stdin/stdout
             "--rm",  # Remove container after exit
             "-v",
-            f"{self.workspace_path}:{self.container_workspace}",  # Mount workspace
+            f"{workspace_root}:{self.container_workspace}",  # Mount workspace
             "-w",
             self.container_workspace,  # Set working directory
         ]
@@ -235,7 +210,10 @@ class DockerHandleFactory(HandleFactory):
         docker_command.append(self.image)
         docker_command.extend(self.command)
 
-        return LspStdioHandle(cmd=docker_command, cwd=self.workspace_path, env=None)
+        return LspStdioHandle(
+            cmd=docker_command,
+            workspace_root=self.container_workspace,
+        )
 
 
 class WebSocketHandleFactory(HandleFactory):
@@ -299,20 +277,13 @@ class WebSocketHandleFactory(HandleFactory):
         except Exception as e:
             return False, f"Failed to connect to {self.url}: {e}"
 
-    async def create(self) -> LspHandle:
-        """Create a WebSocket handle.
-
-        Returns:
-            LspWsHandle instance configured with the URL
-
-        Raises:
-            RuntimeError: If validation fails
-        """
+    async def create(self, workspace_root: str) -> LspHandle:
         is_valid, error = await self.validate()
         if not is_valid:
             raise RuntimeError(f"Cannot create handle: {error}")
 
         return LspWsHandle(
+            workspace_root=workspace_root,
             url=self.url,
             headers=self.headers,
             connect_timeout=self.connect_timeout,

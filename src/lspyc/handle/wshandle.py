@@ -20,6 +20,7 @@ class LspWsHandle(LspHandle):
 
     def __init__(
         self,
+        workspace_root: str,
         url: str,
         headers: dict[str, str] | None = None,
         connect_timeout: float = 10.0,
@@ -34,8 +35,9 @@ class LspWsHandle(LspHandle):
             connect_timeout: Connection timeout in seconds
             reconnect_delay: Delay between reconnection attempts in seconds
             max_reconnect_attempts: Maximum reconnection attempts (-1 for infinite)
+            workspace_root: (remote) workspace root for initialization
         """
-        super().__init__()
+        super().__init__(workspace_root=workspace_root)
         self._url = url
         self._headers = headers
         self._connect_timeout = connect_timeout
@@ -49,8 +51,11 @@ class LspWsHandle(LspHandle):
         self._should_reconnect = False
         self._reconnect_attempts = 0
 
-    async def start(self) -> None:
+    async def start(self) -> dict[str, Any] | None:
         """Establish WebSocket connection and start receive loop.
+
+        Returns:
+            Server capabilities if auto-initialized, None otherwise
 
         Raises:
             RuntimeError: If already connected
@@ -67,6 +72,10 @@ class LspWsHandle(LspHandle):
             self._state = ServerState.STOPPED
             raise
         self._receive_task = asyncio.create_task(self._receive_loop())
+
+        capabilities = await self.initialize(workspace_root=self._workspace_root)
+        self._server_capabilities = capabilities
+        return capabilities
 
     async def stop(self, timeout: float = 5.0) -> None:
         """Close WebSocket connection gracefully."""

@@ -8,12 +8,13 @@ import asyncio
 
 from lspyc.handle import LspWsHandle
 
-from common import main_test
+from common import main_test, PROJ_DIR
 
 
 async def main() -> None:
     ws_url = "ws://localhost:8080/lsp"
     handle = LspWsHandle(
+        workspace_root=PROJ_DIR,
         url=ws_url,
         connect_timeout=10.0,
         reconnect_delay=2.0,

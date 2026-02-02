@@ -167,73 +167,17 @@ class MutilLangClient:
                     f"Available languages: {list(self._language_factories.keys())}"
                 )
 
-            handle = await factory.create()
+            # TODO: maybe we have to identify the correct workspace root for
+            # different languages
+            handle = await factory.create(self.workspace_root)
+            # Set handlers before starting
+            if handle.request_handler is None:
+                handle.request_handler = self._on_request
+            if handle.notification_handler is None:
+                handle.notification_handler = self._on_notification
             await handle.start()
-            await self._initialize_handle(handle, language)
             self._handles[language] = handle
             return handle
-
-    async def _initialize_handle(self, handle: LspHandle, language: str) -> None:
-        """Initialize an LSP handle with the initialize/initialized handshake.
-
-        Args:
-            handle: The LSP handle to initialize
-            language: Language ID for error messages
-
-        Raises:
-            RuntimeError: If initialization fails
-        """
-
-        if handle.request_handler is None:
-            handle.request_handler = self._on_request
-        if handle.notification_handler is None:
-            handle.notification_handler = self._on_notification
-
-        # TODO: adjust root uri if needed
-        root_uri = self._path_to_uri(self.workspace_root)
-
-        try:
-            # Send initialize request
-            init_params = {
-                "processId": os.getpid(),
-                "rootUri": root_uri,
-                "rootPath": self.workspace_root,
-                "workspaceFolders": [
-                    {
-                        "uri": root_uri,
-                        "name": os.path.basename(self.workspace_root),
-                    }
-                ],
-                "capabilities": {
-                    "textDocument": {
-                        # "definition": {"linkSupport": True},  # Could include different resp format
-                        "definition": {},
-                        "references": {},
-                        "documentSymbol": {"hierarchicalDocumentSymbolSupport": True},
-                    },
-                    "workspace": {
-                        "workspaceFolders": True,
-                        "symbol": {"dynamicRegistration": True},
-                    },
-                    "window": {"workDoneProgress": True},
-                    # Rust Feature
-                    # "experimental": {
-                    #     "serverStatusNotification": True
-                    # },
-                },
-            }
-
-            result = await handle.send_request(
-                method="initialize",
-                params=init_params,
-                timeout=30.0,
-            )
-
-            # Send initialized notification
-            await handle.send_notification(method="initialized", params={})
-
-        except Exception as e:
-            raise RuntimeError(f"Failed to initialize {language} server: {e}") from e
 
     async def _get_handle_for_file(self, file_path: str) -> tuple[LspHandle, str]:
         """Get the appropriate handle for a file.

@@ -33,30 +33,16 @@ async def test_native_factory() -> None:
         print(f"Validation error: {error}")
         return
 
-    # Create handle
-    print("Creating handle...")
-    handle = await factory.create()
+    # Create handle with auto-initialization
+    print("Creating handle with auto-initialization...")
+    handle = await factory.create(workspace_root=PROJ_DIR)
     print(f"Handle created: {type(handle).__name__}")
 
-    # Start and test basic communication
+    # Start will automatically initialize
     try:
-        await handle.start()
-        print(f"Handle started, state: {handle.state}")
-
-        # Send initialize request
-        result = await handle.send_request(
-            method="initialize",
-            params={
-                "processId": os.getpid(),
-                "rootUri": f"file://{PROJ_DIR}",
-                "capabilities": {},
-            },
-            timeout=10.0,
-        )
-        print(f"Initialize successful: {bool(result)}")
-
-        # Send initialized notification
-        await handle.send_notification(method="initialized", params={})
+        capabilities = await handle.start()
+        print(f"Handle started and initialized, state: {handle.state}")
+        print(f"Server capabilities received: {bool(capabilities)}")
 
     finally:
         await handle.stop()
@@ -71,7 +57,6 @@ async def test_docker_factory() -> None:
     factory = DockerHandleFactory(
         image="pyright-local",
         command=["pyright-langserver", "--stdio"],
-        workspace_path=PROJ_DIR,
         container_workspace="/workspace",
     )
 
@@ -84,7 +69,7 @@ async def test_docker_factory() -> None:
 
     # Create handle
     print("Creating handle...")
-    handle = await factory.create()
+    handle = await factory.create(PROJ_DIR)
     print(f"Handle created: {type(handle).__name__}")
 
     # Start and test basic communication
@@ -132,7 +117,7 @@ async def test_websocket_factory() -> None:
 
     # Create handle
     print("Creating handle...")
-    handle = await factory.create()
+    handle = await factory.create(PROJ_DIR)
     print(f"Handle created: {type(handle).__name__}")
 
     # Start and test basic communication
@@ -176,7 +161,6 @@ async def test_invalid_factory() -> None:
     factory = DockerHandleFactory(
         image="nonexistent-image",
         command=["some-command"],
-        workspace_path=PROJ_DIR,
     )
     is_valid, error = await factory.validate()
     print(f"   Validation result: {is_valid}")

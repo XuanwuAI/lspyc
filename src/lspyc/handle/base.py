@@ -2,10 +2,12 @@
 
 import asyncio
 from abc import ABC, abstractmethod
-from typing import Any, Awaitable, Callable
+from typing import Any, Awaitable, Callable, TypeAlias
 
 from .process import ProcessManager, ServerState
 from .protocol import JsonRpcMessage, decode_message, encode_message
+
+INBOUND_HANDLER: TypeAlias = Callable[["LspHandle", JsonRpcMessage], Awaitable[None]]
 
 
 class LspHandle(ABC):
@@ -17,11 +19,16 @@ class LspHandle(ABC):
     and sending raw data.
     """
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        request_handler: INBOUND_HANDLER | None = None,
+        notification_handler: INBOUND_HANDLER | None = None,
+    ) -> None:
         """Initialize the LSP handle."""
         self._next_id = 1
         self._pending_responses: dict[int | str, asyncio.Future[Any]] = {}
-        self._message_handlers: list[Callable[[JsonRpcMessage], Awaitable[None]]] = []
+        self.request_handler: INBOUND_HANDLER | None = request_handler
+        self.notification_handler: INBOUND_HANDLER | None = notification_handler
 
     @abstractmethod
     async def start(self) -> None:
@@ -183,29 +190,6 @@ class LspHandle(ABC):
 
         await self._send_raw_message(message)
 
-    def add_message_handler(
-        self,
-        handler: Callable[[JsonRpcMessage], Awaitable[None]],
-    ) -> None:
-        """Add a handler for incoming messages (requests/notifications).
-
-        Args:
-            handler: Async callback to handle messages
-        """
-        self._message_handlers.append(handler)
-
-    def remove_message_handler(
-        self,
-        handler: Callable[[JsonRpcMessage], Awaitable[None]],
-    ) -> None:
-        """Remove a message handler.
-
-        Args:
-            handler: The handler to remove
-        """
-        if handler in self._message_handlers:
-            self._message_handlers.remove(handler)
-
     async def _handle_message(self, message: JsonRpcMessage) -> None:
         """Handle an incoming message.
 
@@ -228,15 +212,21 @@ class LspHandle(ABC):
                 else:
                     future.set_result(content.get("result"))
 
-        # Handle request or notification
-        elif message.is_request or message.is_notification:
-            # Invoke all registered handlers
-            for handler in self._message_handlers:
-                try:
-                    await handler(message)
-                except Exception:
-                    # Handlers should not break the message processing
-                    pass
+        # Handle request
+        elif message.is_request:
+            if self.request_handler is not None:
+                await self.request_handler(self, message)
+                return
+            request_id = content.get("id")
+            if request_id is not None:
+                await self.send_response(
+                    request_id=request_id,
+                    error={"code": -32603, "message": "Internal error"},
+                )
+
+        # Handle notification
+        elif message.is_notification and self.notification_handler is not None:
+            await self.notification_handler(self, message)
 
     def _cancel_pending_responses(self) -> None:
         """Cancel all pending responses."""

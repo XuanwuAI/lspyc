@@ -12,12 +12,15 @@ async def main(proj_root: str):
     await client.open_document("src/hello.rs")
     await asyncio.sleep(5.0)
     res = await client.get_document_symbols("src/hello.rs")
-    print(res)
+    assert res[0]["name"] == "hello"
     res = await client.get_references("src/hello.rs", 0, 9)
-    print(res)
-    res = await client.get_definition("src/hello.rs", 5, 5)
-    print(res)
+    assert any("src/main.rs" in t["uri"] for t in res)
+    await client.open_document("src/main.rs")
+    await asyncio.sleep(5.0)
+    res = await client.get_definition("src/main.rs", 3, 12)
+    assert "src/hello.rs" in res[0]["uri"]
     await client.shutdown()
+    print("All tests passed!")
 
 
 if __name__ == "__main__":

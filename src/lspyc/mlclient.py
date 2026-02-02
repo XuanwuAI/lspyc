@@ -2,6 +2,7 @@
 
 import asyncio
 import os
+from collections import OrderedDict
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -25,6 +26,118 @@ DEFAULT_NATIVE_FACTORIES: dict[str, HandleFactory] = {
     "swift": NativeHandleFactory(["sourcekit-lsp"]),
     "kotlin": NativeHandleFactory(["kotlin-language-server"]),
 }
+
+
+class OpenFileManager:
+    """Manages open files across all language servers with LRU eviction.
+
+    Tracks which files are currently open and automatically closes the least
+    recently used files when the maximum limit is reached.
+    """
+
+    def __init__(self, max_open_files: int = 20) -> None:
+        """Initialize the open file manager.
+
+        Args:
+            max_open_files: Maximum number of files to keep open concurrently
+        """
+        self._open_files: OrderedDict[str, tuple[LspHandle, str]] = OrderedDict()
+        self._max_open_files = max_open_files
+        self._lock = asyncio.Lock()
+
+    async def ensure_file_open(
+        self,
+        handle: LspHandle,
+        abs_path: str,
+        uri: str,
+        language: str,
+        content: str | None = None,
+    ) -> None:
+        """Ensure a file is open, opening it if necessary and managing LRU eviction.
+
+        Args:
+            handle: The LSP handle for the file's language
+            abs_path: Absolute path to the file
+            uri: File URI
+            language: Language ID
+            content: Optional file content. If None, reads from file system
+        """
+        async with self._lock:
+            # If file is already open, just mark it as used
+            if uri in self._open_files:
+                self.mark_file_used(uri)
+                return
+
+            # If at capacity, evict the least recently used file
+            if len(self._open_files) >= self._max_open_files:
+                await self._evict_lru()
+
+            # Read file content if not provided
+            if content is None:
+                with open(abs_path, "r", encoding="utf-8") as f:
+                    content = f.read()
+
+            # Open the file
+            await handle.send_notification(
+                method="textDocument/didOpen",
+                params={
+                    "textDocument": {
+                        "uri": uri,
+                        "languageId": language,
+                        "version": 1,
+                        "text": content,
+                    }
+                },
+            )
+
+            # Track the opened file
+            self._open_files[uri] = (handle, language)
+
+    def mark_file_used(self, uri: str) -> None:
+        """Mark a file as recently used, moving it to the end of the LRU queue.
+
+        Args:
+            uri: File URI
+        """
+        if uri in self._open_files:
+            # Move to end (most recently used)
+            self._open_files.move_to_end(uri)
+
+    async def close_file(self, uri: str) -> None:
+        """Close a specific file.
+
+        Args:
+            uri: File URI to close
+        """
+        if uri in self._open_files:
+            handle, _ = self._open_files[uri]
+
+            # Send didClose notification
+            await handle.send_notification(
+                method="textDocument/didClose",
+                params={"textDocument": {"uri": uri}},
+            )
+
+            # Remove from tracking
+            del self._open_files[uri]
+
+    async def _evict_lru(self) -> None:
+        """Evict the least recently used file."""
+        if self._open_files:
+            # Get the first item (least recently used)
+            lru_uri = next(iter(self._open_files))
+            await self.close_file(lru_uri)
+
+    async def close_all(self) -> None:
+        """Close all open files."""
+        # Create a list of URIs to avoid modifying dict during iteration
+        uris = list(self._open_files.keys())
+        for uri in uris:
+            try:
+                await self.close_file(uri)
+            except Exception:
+                # Continue closing other files even if one fails
+                pass
 
 
 class MutilLangClient:
@@ -97,6 +210,7 @@ class MutilLangClient:
         self._language_factories = dict(language_factories)
         self._handles: dict[str, LspHandle] = {}
         self._initialization_locks: dict[str, asyncio.Lock] = {}
+        self._file_manager = OpenFileManager()
 
     def _detect_language(self, file_path: str) -> str | None:
         """Detect the language ID from a file path.
@@ -209,42 +323,6 @@ class MutilLangClient:
             except Exception as e:
                 raise RuntimeError(f"Failed to validate {language} factory: {e}") from e
 
-    async def open_document(self, file_path: str, content: str | None = None) -> None:
-        """Open a document in the LSP server.
-
-        Some language servers (like TypeScript) require files to be explicitly opened
-        before they can provide symbols and other information.
-
-        Args:
-            file_path: Path to the file (absolute or relative to workspace)
-            content: Optional file content. If None, reads from file system
-
-        Raises:
-            ValueError: If the file type is not supported
-            RuntimeError: If the operation fails
-            FileNotFoundError: If file doesn't exist and content is not provided
-        """
-        handle, abs_path = await self._get_handle_for_file(file_path)
-
-        # Read file content if not provided
-        if content is None:
-            with open(abs_path, "r", encoding="utf-8") as f:
-                content = f.read()
-
-        language = self._detect_language(file_path)
-
-        await handle.send_notification(
-            method="textDocument/didOpen",
-            params={
-                "textDocument": {
-                    "uri": self._path_to_uri(abs_path),
-                    "languageId": language,
-                    "version": 1,
-                    "text": content,
-                }
-            },
-        )
-
     async def get_document_symbols(self, file_path: str) -> list[dict[str, Any]]:
         """Get document symbols for a file.
 
@@ -259,10 +337,19 @@ class MutilLangClient:
             RuntimeError: If the operation fails
         """
         handle, abs_path = await self._get_handle_for_file(file_path)
+        uri = self._path_to_uri(abs_path)
+        language = self._detect_language(file_path)
+
+        # Language should not be None at this point (checked in _get_handle_for_file)
+        if language is None:
+            raise ValueError(f"Unsupported file type: {file_path}")
+
+        # Ensure file is open
+        await self._file_manager.ensure_file_open(handle, abs_path, uri, language)
 
         result = await handle.send_request(
             method="textDocument/documentSymbol",
-            params={"textDocument": {"uri": self._path_to_uri(abs_path)}},
+            params={"textDocument": {"uri": uri}},
             timeout=10.0,
         )
 
@@ -286,11 +373,20 @@ class MutilLangClient:
             RuntimeError: If the operation fails
         """
         handle, abs_path = await self._get_handle_for_file(file_path)
+        uri = self._path_to_uri(abs_path)
+        language = self._detect_language(file_path)
+
+        # Language should not be None at this point (checked in _get_handle_for_file)
+        if language is None:
+            raise ValueError(f"Unsupported file type: {file_path}")
+
+        # Ensure file is open
+        await self._file_manager.ensure_file_open(handle, abs_path, uri, language)
 
         result = await handle.send_request(
             method="textDocument/definition",
             params={
-                "textDocument": {"uri": self._path_to_uri(abs_path)},
+                "textDocument": {"uri": uri},
                 "position": {"line": line, "character": character},
             },
             timeout=10.0,
@@ -327,11 +423,20 @@ class MutilLangClient:
             RuntimeError: If the operation fails
         """
         handle, abs_path = await self._get_handle_for_file(file_path)
+        uri = self._path_to_uri(abs_path)
+        language = self._detect_language(file_path)
+
+        # Language should not be None at this point (checked in _get_handle_for_file)
+        if language is None:
+            raise ValueError(f"Unsupported file type: {file_path}")
+
+        # Ensure file is open
+        await self._file_manager.ensure_file_open(handle, abs_path, uri, language)
 
         result = await handle.send_request(
             method="textDocument/references",
             params={
-                "textDocument": {"uri": self._path_to_uri(abs_path)},
+                "textDocument": {"uri": uri},
                 "position": {"line": line, "character": character},
                 "context": {"includeDeclaration": include_declaration},
             },

@@ -8,6 +8,7 @@ from typing import Any, Mapping
 
 from .handle import HandleFactory, LspHandle, NativeHandleFactory
 from .handle.protocol import JsonRpcMessage
+from .quiescence import QuiescenceTracker
 
 # Default native LSP server factories for supported languages
 # Users can use this as a starting point or create their own custom mappings
@@ -52,6 +53,7 @@ class OpenFileManager:
         uri: str,
         language: str,
         content: str | None = None,
+        tracker: QuiescenceTracker | None = None,
     ) -> None:
         """Ensure a file is open, opening it if necessary and managing LRU eviction.
 
@@ -61,6 +63,7 @@ class OpenFileManager:
             uri: File URI
             language: Language ID
             content: Optional file content. If None, reads from file system
+            tracker: Optional quiescence tracker to wait for server readiness after opening
         """
         async with self._lock:
             # If file is already open, just mark it as used
@@ -92,6 +95,10 @@ class OpenFileManager:
 
             # Track the opened file
             self._open_files[uri] = (handle, language)
+        
+        # Wait for quiescence outside the lock (if file was just opened)
+        if tracker:
+            await tracker.wait_for_quiescence(timeout=10.0)
 
     def mark_file_used(self, uri: str) -> None:
         """Mark a file as recently used, moving it to the end of the LRU queue.
@@ -210,6 +217,7 @@ class MutilLangClient:
         self._language_factories = dict(language_factories)
         self._handles: dict[str, LspHandle] = {}
         self._initialization_locks: dict[str, asyncio.Lock] = {}
+        self._quiescence_trackers: dict[str, QuiescenceTracker] = {}
         self._file_manager = OpenFileManager()
 
     def _detect_language(self, file_path: str) -> str | None:
@@ -291,6 +299,8 @@ class MutilLangClient:
                 handle.notification_handler = self._on_notification
             await handle.start()
             self._handles[language] = handle
+            # Create quiescence tracker for this language
+            self._quiescence_trackers[language] = QuiescenceTracker(grace_period=0.5)
             return handle
 
     async def _get_handle_for_file(self, file_path: str) -> tuple[LspHandle, str]:
@@ -344,8 +354,13 @@ class MutilLangClient:
         if language is None:
             raise ValueError(f"Unsupported file type: {file_path}")
 
-        # Ensure file is open
-        await self._file_manager.ensure_file_open(handle, abs_path, uri, language)
+        # Get tracker for quiescence waiting
+        tracker = self._quiescence_trackers.get(language)
+
+        # Ensure file is open and wait for quiescence
+        await self._file_manager.ensure_file_open(
+            handle, abs_path, uri, language, tracker=tracker
+        )
 
         result = await handle.send_request(
             method="textDocument/documentSymbol",
@@ -380,8 +395,13 @@ class MutilLangClient:
         if language is None:
             raise ValueError(f"Unsupported file type: {file_path}")
 
-        # Ensure file is open
-        await self._file_manager.ensure_file_open(handle, abs_path, uri, language)
+        # Get tracker for quiescence waiting
+        tracker = self._quiescence_trackers.get(language)
+
+        # Ensure file is open and wait for quiescence
+        await self._file_manager.ensure_file_open(
+            handle, abs_path, uri, language, tracker=tracker
+        )
 
         result = await handle.send_request(
             method="textDocument/definition",
@@ -430,8 +450,13 @@ class MutilLangClient:
         if language is None:
             raise ValueError(f"Unsupported file type: {file_path}")
 
-        # Ensure file is open
-        await self._file_manager.ensure_file_open(handle, abs_path, uri, language)
+        # Get tracker for quiescence waiting
+        tracker = self._quiescence_trackers.get(language)
+
+        # Ensure file is open and wait for quiescence
+        await self._file_manager.ensure_file_open(
+            handle, abs_path, uri, language, tracker=tracker
+        )
 
         result = await handle.send_request(
             method="textDocument/references",
@@ -444,6 +469,20 @@ class MutilLangClient:
         )
 
         return result if result else []
+
+    def _get_tracker_for_handle(self, handle: LspHandle) -> QuiescenceTracker | None:
+        """Get the quiescence tracker for a given handle.
+        
+        Args:
+            handle: The LSP handle
+            
+        Returns:
+            The QuiescenceTracker for the handle, or None if not found
+        """
+        for language, h in self._handles.items():
+            if h is handle:
+                return self._quiescence_trackers.get(language)
+        return None
 
     async def shutdown(self, timeout: float = 5.0) -> None:
         """Shutdown all LSP servers.
@@ -461,15 +500,54 @@ class MutilLangClient:
 
         self._handles.clear()
         self._initialization_locks.clear()
+        self._quiescence_trackers.clear()
 
     async def _on_request(self, handle: LspHandle, message: JsonRpcMessage) -> None:
+        """Handle incoming requests from the LSP server.
+        
+        Args:
+            handle: The handle that received the request
+            message: The request message
+        """
         d = message.to_dict()
         request_id = d["id"]
-        if d["method"] == "window/workDoneProgress/create":
-            res = await handle.send_response(request_id)
+        method = d.get("method")
+        
+        if method == "window/workDoneProgress/create":
+            # Extract token and mark work as started
+            params = d.get("params", {})
+            token = params.get("token")
+            if token:
+                tracker = self._get_tracker_for_handle(handle)
+                if tracker:
+                    await tracker.mark_work_started(str(token))
+            
+            # Send success response
+            await handle.send_response(request_id, result=None)
 
     async def _on_notification(
         self, handle: LspHandle, message: JsonRpcMessage
     ) -> None:
-        # TODO: implement notification handling
-        pass
+        """Handle incoming notifications from the LSP server.
+        
+        Args:
+            handle: The handle that received the notification
+            message: The notification message
+        """
+        d = message.to_dict()
+        method = d.get("method")
+        
+        if method == "$/progress":
+            # Track progress notifications for quiescence
+            params = d.get("params", {})
+            token = params.get("token")
+            value = params.get("value", {})
+            kind = value.get("kind")
+            
+            if token:
+                tracker = self._get_tracker_for_handle(handle)
+                if tracker:
+                    if kind == "begin":
+                        await tracker.mark_work_started(str(token))
+                    elif kind == "end":
+                        await tracker.mark_work_ended(str(token))

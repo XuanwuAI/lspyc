@@ -14,7 +14,6 @@ async def main(proj_root: str):
     res = await client.get_document_symbols("src/hello.ts")
     assert res[0]["name"] == "hello"
     print("Testing get_references")
-    await asyncio.sleep(5.0)
     res = await client.get_references("src/hello.ts", 0, 16)
     assert any(
         t["uri"] == "file://" + os.path.join(proj_root, "src/index.ts") for t in res

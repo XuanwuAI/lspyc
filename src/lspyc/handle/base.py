@@ -173,10 +173,7 @@ class LspHandle(ABC):
         if not self.is_running:
             raise RuntimeError("Server is not running")
 
-        if (result is None and error is None) or (
-            result is not None and error is not None
-        ):
-            raise ValueError("Must provide either result or error, but not both")
+        assert result is None or error is None
 
         message: dict[str, Any] = {
             "jsonrpc": "2.0",

@@ -27,7 +27,7 @@ INIT_PARAMS = {
 }
 
 
-async def example_message_handler(message: JsonRpcMessage) -> None:
+async def example_message_handler(handle: LspHandle, message: JsonRpcMessage) -> None:
     """Example handler for incoming server messages."""
     content = message.content
 
@@ -38,7 +38,8 @@ async def example_message_handler(message: JsonRpcMessage) -> None:
 
 
 async def main_test(handle: LspHandle):
-    handle.add_message_handler(example_message_handler)
+    handle.request_handler = example_message_handler
+    handle.notification_handler = example_message_handler
     try:
         await handle.start()
         print(f"Handle (state: {handle.state})")

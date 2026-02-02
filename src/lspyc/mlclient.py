@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from .handle import HandleFactory, LspHandle, NativeHandleFactory
+from .handle.protocol import JsonRpcMessage
 
 # Default native LSP server factories for supported languages
 # Users can use this as a starting point or create their own custom mappings
@@ -182,8 +183,13 @@ class MutilLangClient:
         Raises:
             RuntimeError: If initialization fails
         """
-        # TODO: adjust root uri if needed
 
+        if handle.request_handler is None:
+            handle.request_handler = self._on_request
+        if handle.notification_handler is None:
+            handle.notification_handler = self._on_notification
+
+        # TODO: adjust root uri if needed
         root_uri = self._path_to_uri(self.workspace_root)
 
         try:
@@ -209,6 +215,11 @@ class MutilLangClient:
                         "workspaceFolders": True,
                         "symbol": {"dynamicRegistration": True},
                     },
+                    "window": {"workDoneProgress": True},
+                    # Rust Feature
+                    # "experimental": {
+                    #     "serverStatusNotification": True
+                    # },
                 },
             }
 
@@ -401,3 +412,15 @@ class MutilLangClient:
 
         self._handles.clear()
         self._initialization_locks.clear()
+
+    async def _on_request(self, handle: LspHandle, message: JsonRpcMessage) -> None:
+        d = message.to_dict()
+        request_id = d["id"]
+        if d["method"] == "window/workDoneProgress/create":
+            res = await handle.send_response(request_id)
+
+    async def _on_notification(
+        self, handle: LspHandle, message: JsonRpcMessage
+    ) -> None:
+        # TODO: implement notification handling
+        pass

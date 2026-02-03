@@ -73,19 +73,6 @@ class QuiescenceTracker:
                 # Start new grace period task
                 self._grace_task = asyncio.create_task(self._grace_period_task())
 
-    async def _grace_period_task(self) -> None:
-        """Background task that waits for the grace period and then sets quiescent."""
-        try:
-            await asyncio.sleep(self._grace_period)
-
-            # After grace period, check if still no active work
-            async with self._lock:
-                if not self._active_tokens:
-                    self._quiescent_event.set()
-        except asyncio.CancelledError:
-            # Task was cancelled, which is normal
-            pass
-
     async def wait_for_quiescence(self, timeout: float = 10.0) -> bool:
         """Wait until the server becomes quiescent.
 
@@ -102,3 +89,16 @@ class QuiescenceTracker:
             return True
         except asyncio.TimeoutError:
             return False
+
+    async def _grace_period_task(self) -> None:
+        """Background task that waits for the grace period and then sets quiescent."""
+        try:
+            await asyncio.sleep(self._grace_period)
+
+            # After grace period, check if still no active work
+            async with self._lock:
+                if not self._active_tokens:
+                    self._quiescent_event.set()
+        except asyncio.CancelledError:
+            # Task was cancelled, which is normal
+            pass

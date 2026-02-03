@@ -128,13 +128,6 @@ class OpenFileManager:
             # Remove from tracking
             del self._open_files[uri]
 
-    async def _evict_lru(self) -> None:
-        """Evict the least recently used file."""
-        if self._open_files:
-            # Get the first item (least recently used)
-            lru_uri = next(iter(self._open_files))
-            await self.close_file(lru_uri)
-
     async def close_all(self) -> None:
         """Close all open files."""
         # Create a list of URIs to avoid modifying dict during iteration
@@ -145,6 +138,13 @@ class OpenFileManager:
             except Exception:
                 # Continue closing other files even if one fails
                 pass
+
+    async def _evict_lru(self) -> None:
+        """Evict the least recently used file."""
+        if self._open_files:
+            # Get the first item (least recently used)
+            lru_uri = next(iter(self._open_files))
+            await self.close_file(lru_uri)
 
 
 class MutilLangClient:
@@ -219,6 +219,225 @@ class MutilLangClient:
         self._initialization_locks: dict[str, asyncio.Lock] = {}
         self._quiescence_trackers: dict[str, QuiescenceTracker] = {}
         self._file_manager = OpenFileManager()
+
+    async def validate_handle_factories(self) -> None:
+        """Validate all configured handle factories."""
+        for language, factory in self._language_factories.items():
+            try:
+                await factory.validate()
+            except Exception as e:
+                raise RuntimeError(f"Failed to validate {language} factory: {e}") from e
+
+    async def get_document_symbols(self, file_path: str) -> list[DocumentSymbol]:
+        """Get document symbols for a file.
+
+        Args:
+            file_path: Path to the file (absolute or relative to workspace)
+
+        Returns:
+            List of document symbols
+
+        Raises:
+            ValueError: If the file type is not supported
+            RuntimeError: If the operation fails
+        """
+        try:
+            handle, uri = await self._prepare_query(file_path)
+            result: list[DocumentSymbol] = (
+                await handle.send_request(
+                    method="textDocument/documentSymbol",
+                    params={"textDocument": {"uri": uri}},
+                    timeout=10.0,
+                )
+                or []
+            )
+            return result
+        except Exception:
+            # TODO: log
+            return []
+
+    async def get_definition(
+        self, file_path: str, line: int, character: int
+    ) -> list[Location]:
+        """Get definition locations for a symbol.
+
+        Args:
+            file_path: Path to the file (absolute or relative to workspace)
+            line: Zero-based line number
+            character: Zero-based character offset
+
+        Returns:
+            List of definition locations
+
+        Raises:
+            ValueError: If the file type is not supported
+            RuntimeError: If the operation fails
+        """
+        try:
+            handle, uri = await self._prepare_query(file_path)
+            result: list[Location] = []
+            _result = await handle.send_request(
+                method="textDocument/definition",
+                params={
+                    "textDocument": {"uri": uri},
+                    "position": {"line": line, "character": character},
+                },
+                timeout=10.0,
+            )
+            # Normalize result to always be a list
+            if _result is None:
+                return []
+            elif isinstance(_result, list):
+                result = _result
+            else:
+                result = [_result]
+            return [self._localize_loc(loc, handle) for loc in result]
+        except Exception:
+            # TODO: log
+            return []
+
+    async def get_references(
+        self,
+        file_path: str,
+        line: int,
+        character: int,
+        include_declaration: bool = True,
+    ) -> list[Location]:
+        """Get references to a symbol.
+
+        Args:
+            file_path: Path to the file (absolute or relative to workspace)
+            line: Zero-based line number
+            character: Zero-based character offset
+            include_declaration: Whether to include the declaration
+
+        Returns:
+            List of reference locations
+
+        Raises:
+            ValueError: If the file type is not supported
+            RuntimeError: If the operation fails
+        """
+        try:
+            handle, uri = await self._prepare_query(file_path)
+            result: list[Location] = (
+                await handle.send_request(
+                    method="textDocument/references",
+                    params={
+                        "textDocument": {"uri": uri},
+                        "position": {"line": line, "character": character},
+                        "context": {"includeDeclaration": include_declaration},
+                    },
+                    timeout=10.0,
+                )
+                or []
+            )
+            return [self._localize_loc(loc, handle) for loc in result]
+        except Exception:
+            # TODO: log
+            return []
+
+    async def shutdown(self, timeout: float = 5.0) -> None:
+        """Shutdown all LSP servers.
+
+        Args:
+            timeout: Maximum time to wait for each server to shutdown
+        """
+        for _, handle in self._handles.items():
+            try:
+                if handle.is_running:
+                    await handle.stop(timeout=timeout)
+            except Exception:
+                # Continue shutting down other servers even if one fails
+                pass
+
+        self._handles.clear()
+        self._initialization_locks.clear()
+        self._quiescence_trackers.clear()
+
+    async def _on_request(self, handle: LspHandle, message: JsonRpcMessage) -> None:
+        """Handle incoming requests from the LSP server.
+
+        Args:
+            handle: The handle that received the request
+            message: The request message
+        """
+        d = message.to_dict()
+        request_id = d["id"]
+        method = d.get("method")
+
+        if method == "window/workDoneProgress/create":
+            # Extract token and mark work as started
+            params = d.get("params", {})
+            token = params.get("token")
+            if token:
+                tracker = self._get_tracker_for_handle(handle)
+                if tracker:
+                    await tracker.mark_work_started(str(token))
+
+            # Send success response
+            await handle.send_response(request_id, result=None)
+
+    async def _on_notification(
+        self, handle: LspHandle, message: JsonRpcMessage
+    ) -> None:
+        """Handle incoming notifications from the LSP server.
+
+        Args:
+            handle: The handle that received the notification
+            message: The notification message
+        """
+        d = message.to_dict()
+        method = d.get("method")
+
+        if method == "$/progress":
+            # Track progress notifications for quiescence
+            params = d.get("params", {})
+            token = params.get("token")
+            value = params.get("value", {})
+            kind = value.get("kind")
+
+            if token:
+                tracker = self._get_tracker_for_handle(handle)
+                if tracker:
+                    if kind == "begin":
+                        await tracker.mark_work_started(str(token))
+                    elif kind == "end":
+                        await tracker.mark_work_ended(str(token))
+
+    def _get_tracker_for_handle(self, handle: LspHandle) -> QuiescenceTracker | None:
+        """Get the quiescence tracker for a given handle.
+
+        Args:
+            handle: The LSP handle
+
+        Returns:
+            The QuiescenceTracker for the handle, or None if not found
+        """
+        for language, h in self._handles.items():
+            if h is handle:
+                return self._quiescence_trackers.get(language)
+        return None
+
+    def _localize_loc(self, loc: Location, handle: LspHandle) -> Location:
+        loc = loc.copy()
+        rel_path = handle.uri2rel(loc["uri"])
+        loc["uri"] = Path(self._resolve_file_path(rel_path)).as_uri()
+        return loc
+
+    async def _prepare_query(self, file_path: str) -> tuple[LspHandle, str]:
+        abs_path = self._resolve_file_path(file_path)
+        language = self._detect_language(abs_path)
+        if language is None:
+            raise ValueError(f"Unsupported file type: {file_path}")
+        handle = await self._ensure_handle(language)
+        uri = handle.build_uri(self._get_relative_path(abs_path))
+
+        tracker = self._quiescence_trackers.get(language)
+        await self._file_manager.ensure_file_open(
+            handle, abs_path, uri, language, tracker=tracker
+        )
+        return handle, uri
 
     def _detect_language(self, file_path: str) -> str | None:
         """Detect the language ID from a file path.
@@ -330,222 +549,3 @@ class MutilLangClient:
         if language is None:
             raise ValueError(f"Unsupported file type: {file_path}")
         return await self._ensure_handle(language)
-
-    async def validate_handle_factories(self) -> None:
-        """Validate all configured handle factories."""
-        for language, factory in self._language_factories.items():
-            try:
-                await factory.validate()
-            except Exception as e:
-                raise RuntimeError(f"Failed to validate {language} factory: {e}") from e
-
-    async def _prepare_query(self, file_path: str) -> tuple[LspHandle, str]:
-        abs_path = self._resolve_file_path(file_path)
-        language = self._detect_language(abs_path)
-        if language is None:
-            raise ValueError(f"Unsupported file type: {file_path}")
-        handle = await self._ensure_handle(language)
-        uri = handle.build_uri(self._get_relative_path(abs_path))
-
-        tracker = self._quiescence_trackers.get(language)
-        await self._file_manager.ensure_file_open(
-            handle, abs_path, uri, language, tracker=tracker
-        )
-        return handle, uri
-
-    async def get_document_symbols(self, file_path: str) -> list[DocumentSymbol]:
-        """Get document symbols for a file.
-
-        Args:
-            file_path: Path to the file (absolute or relative to workspace)
-
-        Returns:
-            List of document symbols
-
-        Raises:
-            ValueError: If the file type is not supported
-            RuntimeError: If the operation fails
-        """
-        try:
-            handle, uri = await self._prepare_query(file_path)
-            result: list[DocumentSymbol] = (
-                await handle.send_request(
-                    method="textDocument/documentSymbol",
-                    params={"textDocument": {"uri": uri}},
-                    timeout=10.0,
-                )
-                or []
-            )
-            return result
-        except Exception:
-            # TODO: log
-            return []
-
-    async def get_definition(
-        self, file_path: str, line: int, character: int
-    ) -> list[Location]:
-        """Get definition locations for a symbol.
-
-        Args:
-            file_path: Path to the file (absolute or relative to workspace)
-            line: Zero-based line number
-            character: Zero-based character offset
-
-        Returns:
-            List of definition locations
-
-        Raises:
-            ValueError: If the file type is not supported
-            RuntimeError: If the operation fails
-        """
-        try:
-            handle, uri = await self._prepare_query(file_path)
-            result: list[Location] = []
-            _result = await handle.send_request(
-                method="textDocument/definition",
-                params={
-                    "textDocument": {"uri": uri},
-                    "position": {"line": line, "character": character},
-                },
-                timeout=10.0,
-            )
-            # Normalize result to always be a list
-            if _result is None:
-                return []
-            elif isinstance(_result, list):
-                result = _result
-            else:
-                result = [_result]
-            return [self._localize_loc(loc, handle) for loc in result]
-        except Exception:
-            # TODO: log
-            return []
-
-    async def get_references(
-        self,
-        file_path: str,
-        line: int,
-        character: int,
-        include_declaration: bool = True,
-    ) -> list[Location]:
-        """Get references to a symbol.
-
-        Args:
-            file_path: Path to the file (absolute or relative to workspace)
-            line: Zero-based line number
-            character: Zero-based character offset
-            include_declaration: Whether to include the declaration
-
-        Returns:
-            List of reference locations
-
-        Raises:
-            ValueError: If the file type is not supported
-            RuntimeError: If the operation fails
-        """
-        try:
-            handle, uri = await self._prepare_query(file_path)
-            result: list[Location] = (
-                await handle.send_request(
-                    method="textDocument/references",
-                    params={
-                        "textDocument": {"uri": uri},
-                        "position": {"line": line, "character": character},
-                        "context": {"includeDeclaration": include_declaration},
-                    },
-                    timeout=10.0,
-                )
-                or []
-            )
-            return [self._localize_loc(loc, handle) for loc in result]
-        except Exception:
-            # TODO: log
-            return []
-
-    def _get_tracker_for_handle(self, handle: LspHandle) -> QuiescenceTracker | None:
-        """Get the quiescence tracker for a given handle.
-
-        Args:
-            handle: The LSP handle
-
-        Returns:
-            The QuiescenceTracker for the handle, or None if not found
-        """
-        for language, h in self._handles.items():
-            if h is handle:
-                return self._quiescence_trackers.get(language)
-        return None
-
-    def _localize_loc(self, loc: Location, handle: LspHandle) -> Location:
-        loc = loc.copy()
-        rel_path = handle.uri2rel(loc["uri"])
-        loc["uri"] = Path(self._resolve_file_path(rel_path)).as_uri()
-        return loc
-
-    async def shutdown(self, timeout: float = 5.0) -> None:
-        """Shutdown all LSP servers.
-
-        Args:
-            timeout: Maximum time to wait for each server to shutdown
-        """
-        for _, handle in self._handles.items():
-            try:
-                if handle.is_running:
-                    await handle.stop(timeout=timeout)
-            except Exception:
-                # Continue shutting down other servers even if one fails
-                pass
-
-        self._handles.clear()
-        self._initialization_locks.clear()
-        self._quiescence_trackers.clear()
-
-    async def _on_request(self, handle: LspHandle, message: JsonRpcMessage) -> None:
-        """Handle incoming requests from the LSP server.
-
-        Args:
-            handle: The handle that received the request
-            message: The request message
-        """
-        d = message.to_dict()
-        request_id = d["id"]
-        method = d.get("method")
-
-        if method == "window/workDoneProgress/create":
-            # Extract token and mark work as started
-            params = d.get("params", {})
-            token = params.get("token")
-            if token:
-                tracker = self._get_tracker_for_handle(handle)
-                if tracker:
-                    await tracker.mark_work_started(str(token))
-
-            # Send success response
-            await handle.send_response(request_id, result=None)
-
-    async def _on_notification(
-        self, handle: LspHandle, message: JsonRpcMessage
-    ) -> None:
-        """Handle incoming notifications from the LSP server.
-
-        Args:
-            handle: The handle that received the notification
-            message: The notification message
-        """
-        d = message.to_dict()
-        method = d.get("method")
-
-        if method == "$/progress":
-            # Track progress notifications for quiescence
-            params = d.get("params", {})
-            token = params.get("token")
-            value = params.get("value", {})
-            kind = value.get("kind")
-
-            if token:
-                tracker = self._get_tracker_for_handle(handle)
-                if tracker:
-                    if kind == "begin":
-                        await tracker.mark_work_started(str(token))
-                    elif kind == "end":
-                        await tracker.mark_work_ended(str(token))

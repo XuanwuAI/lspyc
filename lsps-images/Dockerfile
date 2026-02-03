@@ -15,8 +15,8 @@ RUN apk add --no-cache \
     go gopls \
     # C/C++
     clang clang-extra-tools \
-    # Java
-    jdtls \
+    # Java (kotlin server can not run with jdk-25)
+    openjdk21 jdtls \
     bash
 
 # Install rust-analyzer
@@ -33,6 +33,12 @@ RUN pip install --no-cache-dir pyright
 
 # Install TypeScript LSP
 RUN npm install -g typescript-language-server
+
+# Install Kotlin LSP
+RUN wget -O /tmp/kotlin-lsp.zip https://github.com/fwcd/kotlin-language-server/releases/download/1.3.13/server.zip
+RUN unzip /tmp/kotlin-lsp.zip -d /usr/local/share/kotlin
+RUN chmod +x /usr/local/share/kotlin/server/bin/kotlin-language-server
+ENV PATH=/usr/local/share/kotlin/server/bin:$PATH
 
 WORKDIR /workspace
 

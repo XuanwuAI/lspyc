@@ -4,3 +4,7 @@ __pycache__/
 
 # IDE
 .vscode/
+
+# example project
+examples/lang/rust/test-proj/target
+examples/lang/c/test-proj/.cache

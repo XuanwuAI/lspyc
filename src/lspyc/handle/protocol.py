@@ -1,7 +1,41 @@
 """JSON-RPC protocol handling for LSP communication."""
 
 import json
-from typing import Any
+from typing import Any, NotRequired, TypedDict
+
+
+class Position(TypedDict):
+    """Position in a text document expressed as zero-based line and character offset."""
+
+    line: int
+    character: int
+
+
+class Range(TypedDict):
+    """A range in a text document expressed as (zero-based) start and end positions."""
+
+    start: Position
+    end: Position
+
+
+class Location(TypedDict):
+    """Represents a location inside a resource, such as a line inside a text file."""
+
+    uri: str
+    range: Range
+
+
+class DocumentSymbol(TypedDict):
+    """Represents programming constructs like variables, classes, interfaces etc."""
+
+    name: str
+    detail: NotRequired[str]
+    kind: int  # SymbolKind enum value
+    tags: NotRequired[list[int]]  # SymbolTag enum values
+    deprecated: NotRequired[bool]
+    range: Range
+    selectionRange: Range
+    children: NotRequired[list["DocumentSymbol"]]
 
 
 class JsonRpcMessage:

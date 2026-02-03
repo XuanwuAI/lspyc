@@ -4,10 +4,10 @@ import asyncio
 import os
 from collections import OrderedDict
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Mapping
 
 from .handle import HandleFactory, LspHandle, NativeHandleFactory
-from .handle.protocol import JsonRpcMessage
+from .handle.protocol import DocumentSymbol, JsonRpcMessage, Location
 from .quiescence import QuiescenceTracker
 
 # Default native LSP server factories for supported languages
@@ -95,7 +95,7 @@ class OpenFileManager:
 
             # Track the opened file
             self._open_files[uri] = (handle, language)
-        
+
         # Wait for quiescence outside the lock (if file was just opened)
         if tracker:
             await tracker.wait_for_quiescence(timeout=10.0)
@@ -338,7 +338,7 @@ class MutilLangClient:
             except Exception as e:
                 raise RuntimeError(f"Failed to validate {language} factory: {e}") from e
 
-    async def get_document_symbols(self, file_path: str) -> list[dict[str, Any]]:
+    async def get_document_symbols(self, file_path: str) -> list[DocumentSymbol]:
         """Get document symbols for a file.
 
         Args:
@@ -378,7 +378,7 @@ class MutilLangClient:
 
     async def get_definition(
         self, file_path: str, line: int, character: int
-    ) -> list[dict[str, Any]]:
+    ) -> list[Location]:
         """Get definition locations for a symbol.
 
         Args:
@@ -433,7 +433,7 @@ class MutilLangClient:
         line: int,
         character: int,
         include_declaration: bool = True,
-    ) -> list[dict[str, Any]]:
+    ) -> list[Location]:
         """Get references to a symbol.
 
         Args:
@@ -480,10 +480,10 @@ class MutilLangClient:
 
     def _get_tracker_for_handle(self, handle: LspHandle) -> QuiescenceTracker | None:
         """Get the quiescence tracker for a given handle.
-        
+
         Args:
             handle: The LSP handle
-            
+
         Returns:
             The QuiescenceTracker for the handle, or None if not found
         """
@@ -512,7 +512,7 @@ class MutilLangClient:
 
     async def _on_request(self, handle: LspHandle, message: JsonRpcMessage) -> None:
         """Handle incoming requests from the LSP server.
-        
+
         Args:
             handle: The handle that received the request
             message: The request message
@@ -520,7 +520,7 @@ class MutilLangClient:
         d = message.to_dict()
         request_id = d["id"]
         method = d.get("method")
-        
+
         if method == "window/workDoneProgress/create":
             # Extract token and mark work as started
             params = d.get("params", {})
@@ -529,7 +529,7 @@ class MutilLangClient:
                 tracker = self._get_tracker_for_handle(handle)
                 if tracker:
                     await tracker.mark_work_started(str(token))
-            
+
             # Send success response
             await handle.send_response(request_id, result=None)
 
@@ -537,21 +537,21 @@ class MutilLangClient:
         self, handle: LspHandle, message: JsonRpcMessage
     ) -> None:
         """Handle incoming notifications from the LSP server.
-        
+
         Args:
             handle: The handle that received the notification
             message: The notification message
         """
         d = message.to_dict()
         method = d.get("method")
-        
+
         if method == "$/progress":
             # Track progress notifications for quiescence
             params = d.get("params", {})
             token = params.get("token")
             value = params.get("value", {})
             kind = value.get("kind")
-            
+
             if token:
                 tracker = self._get_tracker_for_handle(handle)
                 if tracker:

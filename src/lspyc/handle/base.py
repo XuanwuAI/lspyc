@@ -246,11 +246,14 @@ class LspHandle(ABC):
                 "textDocument": {
                     "definition": {},
                     "references": {},
-                    "documentSymbol": {"hierarchicalDocumentSymbolSupport": True},
+                    "documentSymbol": {
+                        "hierarchicalDocumentSymbolSupport": True,
+                        "symbolKind": {"valueSet": list(range(1, 27))},
+                    },
                 },
                 "workspace": {
                     "workspaceFolders": True,
-                    "symbol": {"dynamicRegistration": True},
+                    # "symbol": {},
                 },
                 "window": {"workDoneProgress": True},
             },

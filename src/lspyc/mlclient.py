@@ -25,8 +25,8 @@ DEFAULT_NATIVE_FACTORIES: dict[str, HandleFactory] = {
     # "csharp": NativeHandleFactory(["omnisharp"]),
     # "ruby": NativeHandleFactory(["solargraph", "stdio"]),
     # "php": NativeHandleFactory(["intelephense", "--stdio"]),
-    "swift": NativeHandleFactory(["sourcekit-lsp"]),
-    # "kotlin": NativeHandleFactory(["kotlin-language-server"]),
+    # "swift": NativeHandleFactory(["sourcekit-lsp"]),
+    "kotlin": NativeHandleFactory(["kotlin-language-server"]),
 }
 
 

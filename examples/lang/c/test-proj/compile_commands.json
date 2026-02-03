@@ -1,11 +1,11 @@
 [
     {
-        "directory": "/Users/zhanpengliu/projects/lspyc/examples/lang/c/test-proj",
+        "directory": "/workspace",
         "command": "clang -c main.c",
         "file": "main.c"
     },
     {
-        "directory": "/Users/zhanpengliu/projects/lspyc/examples/lang/c/test-proj",
+        "directory": "/workspace",
         "command": "clang -c hello.c",
         "file": "hello.c"
     }

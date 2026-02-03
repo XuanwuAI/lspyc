@@ -21,11 +21,11 @@ DEFAULT_NATIVE_FACTORIES: dict[str, HandleFactory] = {
     "rust": NativeHandleFactory(["rust-analyzer"]),
     "go": NativeHandleFactory(["gopls"]),
     "java": NativeHandleFactory(["jdtls"]),
-    "csharp": NativeHandleFactory(["omnisharp"]),
-    "ruby": NativeHandleFactory(["solargraph", "stdio"]),
-    "php": NativeHandleFactory(["intelephense", "--stdio"]),
+    # "csharp": NativeHandleFactory(["omnisharp"]),
+    # "ruby": NativeHandleFactory(["solargraph", "stdio"]),
+    # "php": NativeHandleFactory(["intelephense", "--stdio"]),
     "swift": NativeHandleFactory(["sourcekit-lsp"]),
-    "kotlin": NativeHandleFactory(["kotlin-language-server"]),
+    # "kotlin": NativeHandleFactory(["kotlin-language-server"]),
 }
 
 
@@ -183,13 +183,13 @@ class MutilLangClient:
         # Java
         ".java": "java",
         # C#
-        ".cs": "csharp",
+        # ".cs": "csharp",
         # Ruby
-        ".rb": "ruby",
+        # ".rb": "ruby",
         # PHP
-        ".php": "php",
+        # ".php": "php",
         # Swift
-        ".swift": "swift",
+        # ".swift": "swift",
         # Kotlin
         ".kt": "kotlin",
         ".kts": "kotlin",

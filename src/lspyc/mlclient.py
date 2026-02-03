@@ -9,6 +9,7 @@ from typing import Mapping
 from .handle import HandleFactory, LspHandle, NativeHandleFactory
 from .handle.protocol import DocumentSymbol, JsonRpcMessage, Location
 from .quiescence import QuiescenceTracker
+from .settings import LspycSettings
 
 # Default native LSP server factories for supported languages
 # Users can use this as a starting point or create their own custom mappings
@@ -36,14 +37,16 @@ class OpenFileManager:
     recently used files when the maximum limit is reached.
     """
 
-    def __init__(self, max_open_files: int = 20) -> None:
+    def __init__(self, max_open_files: int, quiescence_timeout: float) -> None:
         """Initialize the open file manager.
 
         Args:
             max_open_files: Maximum number of files to keep open concurrently
+            quiescence_timeout: Timeout for wait_for_quiescence operations in seconds
         """
         self._open_files: OrderedDict[str, tuple[LspHandle, str]] = OrderedDict()
         self._max_open_files = max_open_files
+        self._quiescence_timeout = quiescence_timeout
         self._lock = asyncio.Lock()
 
     async def ensure_file_open(
@@ -98,7 +101,7 @@ class OpenFileManager:
 
         # Wait for quiescence outside the lock (if file was just opened)
         if tracker:
-            await tracker.wait_for_quiescence(timeout=10.0)
+            await tracker.wait_for_quiescence(timeout=self._quiescence_timeout)
 
     def mark_file_used(self, uri: str) -> None:
         """Mark a file as recently used, moving it to the end of the LRU queue.
@@ -201,6 +204,7 @@ class MutilLangClient:
         self,
         workspace_root: str,
         language_factories: Mapping[str, HandleFactory] = DEFAULT_NATIVE_FACTORIES,
+        settings: LspycSettings | None = None,
     ) -> None:
         """Initialize the LSP manager for a workspace.
 
@@ -208,6 +212,7 @@ class MutilLangClient:
             workspace_root: Root directory path for the workspace
             language_factories: Mapping of language IDs to HandleFactory instances
                                Example: {"python": NativeHandleFactory(["pyright-langserver", "--stdio"])}
+            settings: Optional settings instance. If not provided, defaults will be used.
 
         Raises:
             ValueError: If language_factories is empty
@@ -218,7 +223,11 @@ class MutilLangClient:
         self._handles: dict[str, LspHandle] = {}
         self._initialization_locks: dict[str, asyncio.Lock] = {}
         self._quiescence_trackers: dict[str, QuiescenceTracker] = {}
-        self._file_manager = OpenFileManager()
+        self._settings = settings or LspycSettings()
+        self._file_manager = OpenFileManager(
+            max_open_files=self._settings.max_open_files,
+            quiescence_timeout=self._settings.quiescence_timeout
+        )
 
     async def validate_handle_factories(self) -> None:
         """Validate all configured handle factories."""
@@ -247,7 +256,7 @@ class MutilLangClient:
                 await handle.send_request(
                     method="textDocument/documentSymbol",
                     params={"textDocument": {"uri": uri}},
-                    timeout=10.0,
+                    timeout=self._settings.lsp_request_timeout,
                 )
                 or []
             )
@@ -282,7 +291,7 @@ class MutilLangClient:
                     "textDocument": {"uri": uri},
                     "position": {"line": line, "character": character},
                 },
-                timeout=10.0,
+                timeout=self._settings.lsp_request_timeout,
             )
             # Normalize result to always be a list
             if _result is None:
@@ -328,7 +337,7 @@ class MutilLangClient:
                         "position": {"line": line, "character": character},
                         "context": {"includeDeclaration": include_declaration},
                     },
-                    timeout=10.0,
+                    timeout=self._settings.lsp_request_timeout,
                 )
                 or []
             )
@@ -337,12 +346,16 @@ class MutilLangClient:
             # TODO: log
             return []
 
-    async def shutdown(self, timeout: float = 5.0) -> None:
+    async def shutdown(self, timeout: float | None = None) -> None:
         """Shutdown all LSP servers.
 
         Args:
-            timeout: Maximum time to wait for each server to shutdown
+            timeout: Maximum time to wait for each server to shutdown. 
+                    If None, uses the configured lsp_request_timeout.
         """
+        if timeout is None:
+            timeout = self._settings.lsp_request_timeout
+        
         for _, handle in self._handles.items():
             try:
                 if handle.is_running:
@@ -529,7 +542,9 @@ class MutilLangClient:
             await handle.start()
             self._handles[language] = handle
             # Create quiescence tracker for this language
-            self._quiescence_trackers[language] = QuiescenceTracker(grace_period=0.5)
+            self._quiescence_trackers[language] = QuiescenceTracker(
+                grace_period=self._settings.grace_period
+            )
             return handle
 
     async def _get_handle_for_file(self, file_path: str) -> LspHandle:

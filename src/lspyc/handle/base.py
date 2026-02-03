@@ -235,13 +235,17 @@ class LspHandle(ABC):
         init_params = {
             "processId": os.getpid(),
             "rootUri": root_uri,
+            # Required by pyright (though lsp spec states that rootUri wins over rootPath)
             "rootPath": workspace_root,
-            "workspaceFolders": [
-                {
-                    "uri": root_uri,
-                    "name": os.path.basename(workspace_root),
-                }
-            ],
+            # TODO: add workspace support
+            # Currently, a bug in pyright that blocks if workspaceFolders is provided
+            # The fix has not been released yet (current version 1.1.408)
+            # "workspaceFolders": [
+            #     {
+            #         "uri": root_uri,
+            #         "name": os.path.basename(workspace_root),
+            #     }
+            # ],
             "capabilities": {
                 "textDocument": {
                     "definition": {},
@@ -251,10 +255,10 @@ class LspHandle(ABC):
                         "symbolKind": {"valueSet": list(range(1, 27))},
                     },
                 },
-                "workspace": {
-                    "workspaceFolders": True,
-                    # "symbol": {},
-                },
+                # "workspace": {
+                #     "workspaceFolders": True,
+                #     "symbol": {},
+                # },
                 "window": {"workDoneProgress": True},
             },
         }

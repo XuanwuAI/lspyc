@@ -40,6 +40,21 @@ RUN unzip /tmp/kotlin-lsp.zip -d /usr/local/share/kotlin
 RUN chmod +x /usr/local/share/kotlin/server/bin/kotlin-language-server
 ENV PATH=/usr/local/share/kotlin/server/bin:$PATH
 
-WORKDIR /workspace
+# Install uv
+RUN pip install uv
 
-CMD ["/bin/sh"]
+# Copy project to /app directory
+WORKDIR /app
+ADD pyproject.toml .
+ADD .python-version .
+ADD uv.lock .
+RUN uv sync --no-dev --no-install-project
+
+ADD . .
+RUN uv sync --no-dev
+
+ENV PATH=/app/.venv/bin:$PATH
+
+
+WORKDIR /workspace
+CMD ["/bin/bash"]

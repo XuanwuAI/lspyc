@@ -249,16 +249,21 @@ class MutilLangClient:
             return file_path
         return os.path.abspath(os.path.join(self.workspace_root, file_path))
 
-    def _path_to_uri(self, file_path: str) -> str:
-        """Convert a file path to a URI.
+    def _get_relative_path(self, abs_path: str) -> str:
+        """Get relative path from absolute path.
 
         Args:
-            file_path: Absolute file path
+            abs_path: Absolute file path
 
         Returns:
-            File URI (e.g., 'file:///path/to/file')
+            Path relative to workspace root
         """
-        return Path(file_path).as_uri()
+        try:
+            return os.path.relpath(abs_path, self.workspace_root)
+        except ValueError:
+            # If abs_path is on a different drive on Windows, relpath fails
+            # In this case, just return the absolute path
+            return abs_path
 
     async def _ensure_handle(self, language: str) -> LspHandle:
         """Ensure a handle exists for the given language, creating it if necessary.
@@ -347,7 +352,8 @@ class MutilLangClient:
             RuntimeError: If the operation fails
         """
         handle, abs_path = await self._get_handle_for_file(file_path)
-        uri = self._path_to_uri(abs_path)
+        rel_path = self._get_relative_path(abs_path)
+        uri = handle.build_uri(rel_path)
         language = self._detect_language(file_path)
 
         # Language should not be None at this point (checked in _get_handle_for_file)
@@ -388,7 +394,8 @@ class MutilLangClient:
             RuntimeError: If the operation fails
         """
         handle, abs_path = await self._get_handle_for_file(file_path)
-        uri = self._path_to_uri(abs_path)
+        rel_path = self._get_relative_path(abs_path)
+        uri = handle.build_uri(rel_path)
         language = self._detect_language(file_path)
 
         # Language should not be None at this point (checked in _get_handle_for_file)
@@ -443,7 +450,8 @@ class MutilLangClient:
             RuntimeError: If the operation fails
         """
         handle, abs_path = await self._get_handle_for_file(file_path)
-        uri = self._path_to_uri(abs_path)
+        rel_path = self._get_relative_path(abs_path)
+        uri = handle.build_uri(rel_path)
         language = self._detect_language(file_path)
 
         # Language should not be None at this point (checked in _get_handle_for_file)

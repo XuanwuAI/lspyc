@@ -34,6 +34,17 @@ class LspHandle(ABC):
         self.request_handler: INBOUND_HANDLER | None = request_handler
         self.notification_handler: INBOUND_HANDLER | None = notification_handler
 
+    def build_uri(self, relative_path: str) -> str:
+        assert not relative_path.startswith("/") or relative_path.startswith("..")
+        abs_path = os.path.join(self._workspace_root, relative_path)
+        return Path(abs_path).as_uri()
+
+    def uri2rel(self, uri: str) -> str:
+        """Convert a URI to a relative path from the workspace root."""
+        path = Path(uri.replace("file://", ""))
+        workspace = Path(self._workspace_root)
+        return str(path.relative_to(workspace))
+
     @abstractmethod
     async def start(self) -> dict[str, Any] | None:
         """Start the LSP server/connection.

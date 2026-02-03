@@ -1,0 +1,12 @@
+[
+    {
+        "directory": "/Users/zhanpengliu/projects/lspyc/examples/lang/c/test-proj",
+        "command": "clang -c main.c",
+        "file": "main.c"
+    },
+    {
+        "directory": "/Users/zhanpengliu/projects/lspyc/examples/lang/c/test-proj",
+        "command": "clang -c hello.c",
+        "file": "hello.c"
+    }
+]

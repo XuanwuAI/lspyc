@@ -246,6 +246,11 @@ class MutilLangClient:
             Absolute file path
         """
         if os.path.isabs(file_path):
+            # Currently, we only support files within the workspace
+            assert (
+                os.path.commonpath([self.workspace_root, file_path])
+                == self.workspace_root
+            )
             return file_path
         return os.path.abspath(os.path.join(self.workspace_root, file_path))
 
@@ -308,7 +313,7 @@ class MutilLangClient:
             self._quiescence_trackers[language] = QuiescenceTracker(grace_period=0.5)
             return handle
 
-    async def _get_handle_for_file(self, file_path: str) -> tuple[LspHandle, str]:
+    async def _get_handle_for_file(self, file_path: str) -> LspHandle:
         """Get the appropriate handle for a file.
 
         Args:
@@ -324,11 +329,7 @@ class MutilLangClient:
         language = self._detect_language(file_path)
         if language is None:
             raise ValueError(f"Unsupported file type: {file_path}")
-
-        abs_path = self._resolve_file_path(file_path)
-        handle = await self._ensure_handle(language)
-
-        return handle, abs_path
+        return await self._ensure_handle(language)
 
     async def validate_handle_factories(self) -> None:
         """Validate all configured handle factories."""
@@ -337,6 +338,20 @@ class MutilLangClient:
                 await factory.validate()
             except Exception as e:
                 raise RuntimeError(f"Failed to validate {language} factory: {e}") from e
+
+    async def _prepare_query(self, file_path: str) -> tuple[LspHandle, str]:
+        abs_path = self._resolve_file_path(file_path)
+        language = self._detect_language(abs_path)
+        if language is None:
+            raise ValueError(f"Unsupported file type: {file_path}")
+        handle = await self._ensure_handle(language)
+        uri = handle.build_uri(self._get_relative_path(abs_path))
+
+        tracker = self._quiescence_trackers.get(language)
+        await self._file_manager.ensure_file_open(
+            handle, abs_path, uri, language, tracker=tracker
+        )
+        return handle, uri
 
     async def get_document_symbols(self, file_path: str) -> list[DocumentSymbol]:
         """Get document symbols for a file.
@@ -351,30 +366,20 @@ class MutilLangClient:
             ValueError: If the file type is not supported
             RuntimeError: If the operation fails
         """
-        handle, abs_path = await self._get_handle_for_file(file_path)
-        rel_path = self._get_relative_path(abs_path)
-        uri = handle.build_uri(rel_path)
-        language = self._detect_language(file_path)
-
-        # Language should not be None at this point (checked in _get_handle_for_file)
-        if language is None:
-            raise ValueError(f"Unsupported file type: {file_path}")
-
-        # Get tracker for quiescence waiting
-        tracker = self._quiescence_trackers.get(language)
-
-        # Ensure file is open and wait for quiescence
-        await self._file_manager.ensure_file_open(
-            handle, abs_path, uri, language, tracker=tracker
-        )
-
-        result = await handle.send_request(
-            method="textDocument/documentSymbol",
-            params={"textDocument": {"uri": uri}},
-            timeout=10.0,
-        )
-
-        return result if result else []
+        try:
+            handle, uri = await self._prepare_query(file_path)
+            result: list[DocumentSymbol] = (
+                await handle.send_request(
+                    method="textDocument/documentSymbol",
+                    params={"textDocument": {"uri": uri}},
+                    timeout=10.0,
+                )
+                or []
+            )
+            return result
+        except Exception:
+            # TODO: log
+            return []
 
     async def get_definition(
         self, file_path: str, line: int, character: int
@@ -393,39 +398,28 @@ class MutilLangClient:
             ValueError: If the file type is not supported
             RuntimeError: If the operation fails
         """
-        handle, abs_path = await self._get_handle_for_file(file_path)
-        rel_path = self._get_relative_path(abs_path)
-        uri = handle.build_uri(rel_path)
-        language = self._detect_language(file_path)
-
-        # Language should not be None at this point (checked in _get_handle_for_file)
-        if language is None:
-            raise ValueError(f"Unsupported file type: {file_path}")
-
-        # Get tracker for quiescence waiting
-        tracker = self._quiescence_trackers.get(language)
-
-        # Ensure file is open and wait for quiescence
-        await self._file_manager.ensure_file_open(
-            handle, abs_path, uri, language, tracker=tracker
-        )
-
-        result = await handle.send_request(
-            method="textDocument/definition",
-            params={
-                "textDocument": {"uri": uri},
-                "position": {"line": line, "character": character},
-            },
-            timeout=10.0,
-        )
-
-        # Normalize result to always be a list
-        if result is None:
+        try:
+            handle, uri = await self._prepare_query(file_path)
+            result: list[Location] = []
+            _result = await handle.send_request(
+                method="textDocument/definition",
+                params={
+                    "textDocument": {"uri": uri},
+                    "position": {"line": line, "character": character},
+                },
+                timeout=10.0,
+            )
+            # Normalize result to always be a list
+            if _result is None:
+                return []
+            elif isinstance(_result, list):
+                result = _result
+            else:
+                result = [_result]
+            return [self._localize_loc(loc, handle) for loc in result]
+        except Exception:
+            # TODO: log
             return []
-        elif isinstance(result, list):
-            return result
-        else:
-            return [result]
 
     async def get_references(
         self,
@@ -449,34 +443,24 @@ class MutilLangClient:
             ValueError: If the file type is not supported
             RuntimeError: If the operation fails
         """
-        handle, abs_path = await self._get_handle_for_file(file_path)
-        rel_path = self._get_relative_path(abs_path)
-        uri = handle.build_uri(rel_path)
-        language = self._detect_language(file_path)
-
-        # Language should not be None at this point (checked in _get_handle_for_file)
-        if language is None:
-            raise ValueError(f"Unsupported file type: {file_path}")
-
-        # Get tracker for quiescence waiting
-        tracker = self._quiescence_trackers.get(language)
-
-        # Ensure file is open and wait for quiescence
-        await self._file_manager.ensure_file_open(
-            handle, abs_path, uri, language, tracker=tracker
-        )
-
-        result = await handle.send_request(
-            method="textDocument/references",
-            params={
-                "textDocument": {"uri": uri},
-                "position": {"line": line, "character": character},
-                "context": {"includeDeclaration": include_declaration},
-            },
-            timeout=10.0,
-        )
-
-        return result if result else []
+        try:
+            handle, uri = await self._prepare_query(file_path)
+            result: list[Location] = (
+                await handle.send_request(
+                    method="textDocument/references",
+                    params={
+                        "textDocument": {"uri": uri},
+                        "position": {"line": line, "character": character},
+                        "context": {"includeDeclaration": include_declaration},
+                    },
+                    timeout=10.0,
+                )
+                or []
+            )
+            return [self._localize_loc(loc, handle) for loc in result]
+        except Exception:
+            # TODO: log
+            return []
 
     def _get_tracker_for_handle(self, handle: LspHandle) -> QuiescenceTracker | None:
         """Get the quiescence tracker for a given handle.
@@ -491,6 +475,12 @@ class MutilLangClient:
             if h is handle:
                 return self._quiescence_trackers.get(language)
         return None
+
+    def _localize_loc(self, loc: Location, handle: LspHandle) -> Location:
+        loc = loc.copy()
+        rel_path = handle.uri2rel(loc["uri"])
+        loc["uri"] = Path(self._resolve_file_path(rel_path)).as_uri()
+        return loc
 
     async def shutdown(self, timeout: float = 5.0) -> None:
         """Shutdown all LSP servers.

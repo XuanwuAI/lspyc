@@ -9,7 +9,6 @@ PROJ_ROOT = os.path.join(os.path.dirname(FILE), "test-proj")
 
 async def main(proj_root: str):
     client = MutilLangClient(proj_root)
-    # Open documents before requesting symbols (required for TypeScript)
     print("Testing get_document_symbols")
     res = await client.get_document_symbols("src/hello.ts")
     assert res[0]["name"] == "hello"

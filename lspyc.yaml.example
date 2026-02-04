@@ -1,0 +1,59 @@
+# LSP Factory Configuration Example
+#
+# This file configures LSP server factories for lspyc.
+# Place this file as 'lspyc.yaml' in your current working directory
+# or home directory, or specify its path via LSPYC_CONFIG_FILE environment variable.
+
+language_factories:
+  # Python - Native LSP server via stdio
+  python:
+    type: native
+    command: ["pyright-langserver", "--stdio"]
+    # Optional: cwd: "/custom/working/dir"
+    # Optional: env: {"PYTHONPATH": "/custom/path"}
+
+  # JavaScript/TypeScript - Native LSP server
+  javascript:
+    type: native
+    command: ["typescript-language-server", "--stdio"]
+
+  typescript:
+    type: native
+    command: ["typescript-language-server", "--stdio"]
+
+  # Rust - Docker-based LSP server
+  rust:
+    type: docker
+    image: rust-analyzer:latest
+    command: ["rust-analyzer"]
+    # Optional: container_workspace: "/workspace"
+    # Optional: additional_mounts: {"/host/path": "/container/path"}
+
+  # Go - Native LSP server
+  go:
+    type: native
+    command: ["gopls"]
+
+  # Java - Native LSP server
+  java:
+    type: native
+    command: ["jdtls"]
+
+  # C/C++ - Native LSP server (clangd)
+  c:
+    type: native
+    command: ["clangd"]
+
+  cpp:
+    type: native
+    command: ["clangd"]
+
+  # Example: Remote LSP server via WebSocket
+  # remote_python:
+  #   type: websocket
+  #   url: ws://remote-server:8080/pyright
+  #   headers:
+  #     Authorization: "Bearer your-token-here"
+  #   connect_timeout: 15.0
+  #   reconnect_delay: 2.0
+  #   max_reconnect_attempts: -1  # -1 for infinite

@@ -10,24 +10,7 @@ from .handle import HandleFactory, LspHandle, NativeHandleFactory
 from .handle.protocol import DocumentSymbol, JsonRpcMessage, Location
 from .quiescence import QuiescenceTracker
 from .settings import LspycSettings
-
-# Default native LSP server factories for supported languages
-# Users can use this as a starting point or create their own custom mappings
-DEFAULT_NATIVE_FACTORIES: dict[str, HandleFactory] = {
-    "python": NativeHandleFactory(["pyright-langserver", "--stdio"]),
-    "javascript": NativeHandleFactory(["typescript-language-server", "--stdio"]),
-    "typescript": NativeHandleFactory(["typescript-language-server", "--stdio"]),
-    "c": NativeHandleFactory(["clangd"]),
-    "cpp": NativeHandleFactory(["clangd"]),
-    "rust": NativeHandleFactory(["rust-analyzer"]),
-    "go": NativeHandleFactory(["gopls"]),
-    "java": NativeHandleFactory(["jdtls"]),
-    # "csharp": NativeHandleFactory(["omnisharp"]),
-    # "ruby": NativeHandleFactory(["solargraph", "stdio"]),
-    # "php": NativeHandleFactory(["intelephense", "--stdio"]),
-    # "swift": NativeHandleFactory(["sourcekit-lsp"]),
-    "kotlin": NativeHandleFactory(["kotlin-language-server"]),
-}
+from .factory_builder import build_language_factories_default
 
 
 class OpenFileManager:
@@ -203,7 +186,7 @@ class MutilLangClient:
     def __init__(
         self,
         workspace_root: str,
-        language_factories: Mapping[str, HandleFactory] = DEFAULT_NATIVE_FACTORIES,
+        language_factories: Mapping[str, HandleFactory] | None = None,
         settings: LspycSettings | None = None,
     ) -> None:
         """Initialize the LSP manager for a workspace.
@@ -219,14 +202,17 @@ class MutilLangClient:
         """
 
         self.workspace_root = os.path.abspath(workspace_root)
-        self._language_factories = dict(language_factories)
+        self._language_factories = (
+            language_factories or build_language_factories_default()
+        )
+        print(self._language_factories)
         self._handles: dict[str, LspHandle] = {}
         self._initialization_locks: dict[str, asyncio.Lock] = {}
         self._quiescence_trackers: dict[str, QuiescenceTracker] = {}
         self._settings = settings or LspycSettings()
         self._file_manager = OpenFileManager(
             max_open_files=self._settings.max_open_files,
-            quiescence_timeout=self._settings.quiescence_timeout
+            quiescence_timeout=self._settings.quiescence_timeout,
         )
 
     async def validate_handle_factories(self) -> None:
@@ -350,12 +336,12 @@ class MutilLangClient:
         """Shutdown all LSP servers.
 
         Args:
-            timeout: Maximum time to wait for each server to shutdown. 
+            timeout: Maximum time to wait for each server to shutdown.
                     If None, uses the configured lsp_request_timeout.
         """
         if timeout is None:
             timeout = self._settings.lsp_request_timeout
-        
+
         for _, handle in self._handles.items():
             try:
                 if handle.is_running:

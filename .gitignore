@@ -8,3 +8,6 @@ __pycache__/
 # example project
 examples/lang/rust/test-proj/target
 examples/lang/c/test-proj/.cache
+
+# Config
+.lspyc.yaml

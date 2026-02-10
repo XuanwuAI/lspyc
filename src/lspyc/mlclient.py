@@ -6,7 +6,7 @@ from collections import OrderedDict
 from pathlib import Path
 from typing import Mapping
 
-from .factory_builder import build_language_factories_default
+from .factory_builder import build_factories
 from .handle import HandleFactory, LspHandle
 from .handle.protocol import DocumentSymbol, JsonRpcMessage, Location
 from .quiescence import QuiescenceTracker
@@ -187,7 +187,7 @@ class MutilLangClient:
         self,
         workspace_root: str,
         language_factories: Mapping[str, HandleFactory] | None = None,
-        settings: LspycSettings | None = None,
+        settings: LspycSettings = LspycSettings(),
     ) -> None:
         """Initialize the LSP manager for a workspace.
 
@@ -202,17 +202,20 @@ class MutilLangClient:
         """
 
         self.workspace_root = os.path.abspath(workspace_root)
-        self._language_factories = (
-            language_factories or build_language_factories_default()
-        )
         self._handles: dict[str, LspHandle] = {}
         self._initialization_locks: dict[str, asyncio.Lock] = {}
         self._quiescence_trackers: dict[str, QuiescenceTracker] = {}
-        self._settings = settings or LspycSettings()
-        self._file_manager = OpenFileManager(
-            max_open_files=self._settings.max_open_files,
-            quiescence_timeout=self._settings.quiescence_timeout,
+        self._language_factories = language_factories or build_factories(
+            settings.factory_ty,
+            settings.docker_factory,
+            settings.ws_factory,
+            settings.factory_file,
         )
+        self._file_manager = OpenFileManager(
+            max_open_files=settings.max_open_files,
+            quiescence_timeout=settings.quiescence_timeout,
+        )
+        self._settings = settings
 
     async def validate_handle_factories(self) -> None:
         """Validate all configured handle factories."""

@@ -1,6 +1,22 @@
 """Configuration settings for lspyc."""
 
+from typing import Literal, TypeAlias
+
 from pydantic_settings import BaseSettings
+
+FactoryTypes: TypeAlias = Literal["native", "docker", "ws", "auto", "file"]
+
+
+class WsHandleSettings(BaseSettings):
+    base_url: str
+    connect_timeout: float = 10.0
+    reconnect_delay: float = 1.0
+    max_reconnect_attempts: int = -1
+
+
+class DockerHandleSettings(BaseSettings):
+    image: str = "lspyc-server"
+    container_workspace: str = "/workspace"
 
 
 class LspycSettings(BaseSettings):
@@ -26,3 +42,11 @@ class LspycSettings(BaseSettings):
         "env_prefix": "LSPYC_",
         "case_sensitive": False,
     }
+
+    factory_ty: FactoryTypes = "auto"
+
+    docker_factory: DockerHandleSettings = DockerHandleSettings()
+
+    ws_factory: WsHandleSettings | None = None
+
+    factory_file: str | None = None

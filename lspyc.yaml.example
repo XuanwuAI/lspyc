@@ -27,7 +27,6 @@ language_factories:
     image: rust-analyzer:latest
     command: ["rust-analyzer"]
     # Optional: container_workspace: "/workspace"
-    # Optional: additional_mounts: {"/host/path": "/container/path"}
 
   # Go - Native LSP server
   go:

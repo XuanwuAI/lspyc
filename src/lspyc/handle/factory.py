@@ -4,6 +4,7 @@ import asyncio
 import os
 import shutil
 from abc import ABC, abstractmethod
+from urllib.parse import urljoin
 
 import websockets
 
@@ -109,10 +110,9 @@ class DockerHandleFactory(HandleFactory):
 
     def __init__(
         self,
-        image: str,
         command: list[str],
+        image: str = "lspyc-server",
         container_workspace: str = "/workspace",
-        additional_mounts: dict[str, str] | None = None,
     ) -> None:
         """Initialize the Docker handle factory.
 
@@ -121,7 +121,6 @@ class DockerHandleFactory(HandleFactory):
             command: Command to run inside the container
             workspace_path: Host path to mount as workspace
             container_workspace: Container path for workspace mount
-            additional_mounts: Additional volume mounts (host_path: container_path)
         """
         if not image:
             raise ValueError("Docker image cannot be empty")
@@ -131,7 +130,6 @@ class DockerHandleFactory(HandleFactory):
         self.image = image
         self.command = command
         self.container_workspace = container_workspace
-        self.additional_mounts = additional_mounts or {}
 
     async def validate(self) -> tuple[bool, str | None]:
         """Check if docker is available and image exists.
@@ -202,10 +200,6 @@ class DockerHandleFactory(HandleFactory):
             self.container_workspace,  # Set working directory
         ]
 
-        # Add additional mounts
-        for host_path, container_path in self.additional_mounts.items():
-            docker_command.extend(["-v", f"{host_path}:{container_path}"])
-
         # Add image and command
         docker_command.append(self.image)
         docker_command.extend(self.command)
@@ -226,6 +220,7 @@ class WebSocketHandleFactory(HandleFactory):
     def __init__(
         self,
         url: str,
+        server_name: str,
         headers: dict[str, str] | None = None,
         connect_timeout: float = 10.0,
         reconnect_delay: float = 2.0,
@@ -240,12 +235,11 @@ class WebSocketHandleFactory(HandleFactory):
             reconnect_delay: Delay between reconnection attempts in seconds
             max_reconnect_attempts: Maximum reconnection attempts (-1 for infinite)
         """
-        if not url:
-            raise ValueError("URL cannot be empty")
-        if not url.startswith(("ws://", "wss://")):
-            raise ValueError("URL must start with ws:// or wss://")
+        assert url and url.startswith(
+            ("ws://", "wss://")
+        ), "URL must start with ws:// or wss://"
 
-        self.url = url
+        self.url = urljoin(url, server_name)
         self.headers = headers
         self.connect_timeout = connect_timeout
         self.reconnect_delay = reconnect_delay
@@ -290,3 +284,24 @@ class WebSocketHandleFactory(HandleFactory):
             reconnect_delay=self.reconnect_delay,
             max_reconnect_attempts=self.max_reconnect_attempts,
         )
+
+
+class AutoHandleFactory(HandleFactory):
+    """Factory for auto-detecting LSP server type and creating appropriate handle."""
+
+    def __init__(self, candidates: list[HandleFactory]) -> None:
+        super().__init__()
+        self.candidates: list[HandleFactory] = candidates
+
+    async def validate(self) -> tuple[bool, str | None]:
+        for candidate in self.candidates:
+            if await candidate.validate():
+                return True, None
+        return False, "No valid handle factory found"
+
+    async def create(self, workspace_root: str) -> LspHandle:
+        for candidate in self.candidates:
+            if await candidate.validate():
+                print(f"Using {candidate.__class__.__name__} handle factory")
+                return await candidate.create(workspace_root)
+        raise RuntimeError("No valid handle factory found")

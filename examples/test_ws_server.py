@@ -7,14 +7,14 @@ and interact with it using the LspWsHandle client.
 import asyncio
 from pathlib import Path
 
-from lspyc import LspWsHandle, MutilLangClient, WebSocketHandleFactory
+from lspyc import MutilLangClient, WebSocketHandleFactory
 
 
 async def test_pyright_server():
     """Test connecting to the pyright LSP server via WebSocket."""
 
     workspace_root = str(Path(__file__).parent)
-    factory_map = {"python": WebSocketHandleFactory("ws://localhost:8080/pyright")}
+    factory_map = {"python": WebSocketHandleFactory("ws://localhost:8080/", "pyright-langserver")}
     mlclient = MutilLangClient(workspace_root, factory_map)
 
     # Get a test workspace (use current directory or examples directory)
@@ -32,7 +32,9 @@ async def test_pyright_server():
 async def test_rust_analyzer_server():
     """Test connecting to the rust-analyzer LSP server via WebSocket."""
     workspace_root = str(Path(__file__).parent / "lang" / "rust" / "test-proj")
-    factory_map = {"rust": WebSocketHandleFactory("ws://localhost:8080/rust-analyzer")}
+    factory_map = {
+        "rust": WebSocketHandleFactory("ws://localhost:8080", "rust-analyzer")
+    }
     mlclient = MutilLangClient(workspace_root, factory_map)
     print("=" * 70)
     print("Testing Rust Analyzer LSP Server via WebSocket")

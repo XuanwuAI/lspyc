@@ -1,7 +1,6 @@
 """LSP Python Client - A library for LSP server management and usage."""
 
 from .factory_builder import (
-    FactoryConfigError,
     build_lang_factories_from_dict,
     build_lang_factories_from_file,
 )
@@ -31,7 +30,6 @@ __all__ = [
     "LspWsHandle",
     "LspycSettings",
     "MutilLangClient",
-    "FactoryConfigError",
     "build_lang_factories_from_dict",
     "build_lang_factories_from_file",
 ]

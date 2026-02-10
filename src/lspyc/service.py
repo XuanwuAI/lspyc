@@ -444,7 +444,7 @@ async def run_server(
 if __name__ == "__main__":
 
     lsp_configs = {
-        "pyright": {
+        "pyright-langserver": {
             "command": ["pyright-langserver", "--stdio"],
         },
         "clangd": {

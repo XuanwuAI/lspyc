@@ -2,6 +2,7 @@
 
 from .base import LspHandle, LspStdioHandle
 from .factory import (
+    AutoHandleFactory,
     DockerHandleFactory,
     HandleFactory,
     NativeHandleFactory,
@@ -17,4 +18,5 @@ __all__ = [
     "NativeHandleFactory",
     "DockerHandleFactory",
     "WebSocketHandleFactory",
+    "AutoHandleFactory",
 ]

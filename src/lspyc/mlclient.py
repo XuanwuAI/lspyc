@@ -6,11 +6,11 @@ from collections import OrderedDict
 from pathlib import Path
 from typing import Mapping
 
-from .handle import HandleFactory, LspHandle, NativeHandleFactory
+from .factory_builder import build_language_factories_default
+from .handle import HandleFactory, LspHandle
 from .handle.protocol import DocumentSymbol, JsonRpcMessage, Location
 from .quiescence import QuiescenceTracker
 from .settings import LspycSettings
-from .factory_builder import build_language_factories_default
 
 
 class OpenFileManager:
@@ -205,7 +205,6 @@ class MutilLangClient:
         self._language_factories = (
             language_factories or build_language_factories_default()
         )
-        print(self._language_factories)
         self._handles: dict[str, LspHandle] = {}
         self._initialization_locks: dict[str, asyncio.Lock] = {}
         self._quiescence_trackers: dict[str, QuiescenceTracker] = {}

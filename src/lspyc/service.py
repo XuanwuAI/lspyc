@@ -7,6 +7,7 @@ with each client connection spawning a dedicated LSP server process.
 import asyncio
 import http
 import logging
+import os
 from typing import Any
 
 from websockets.asyncio.server import ServerConnection, serve
@@ -14,15 +15,19 @@ from websockets.datastructures import Headers
 from websockets.exceptions import ConnectionClosed
 from websockets.http11 import Response
 
+LOG_LEVEL = os.getenv("LSPYC_SERVICE_LOG_LEVEL", "INFO")
+HOST = os.getenv("LSPYC_SERVICE_HOST", "localhost")
+PORT = int(os.getenv("LSPYC_SERVICE_PORT", "8080"))
+
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.DEBUG)
+logger.setLevel(LOG_LEVEL)
 
 # Add console handler if no handlers are configured
 if not logger.handlers:
     console_handler = logging.StreamHandler()
-    console_handler.setLevel(logging.DEBUG)
+    console_handler.setLevel(LOG_LEVEL)
     formatter = logging.Formatter(
-        '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+        "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
     )
     console_handler.setFormatter(formatter)
     logger.addHandler(console_handler)
@@ -416,8 +421,8 @@ class LspService:
 
 async def run_server(
     lsp_configs: dict[str, dict[str, Any]],
-    host: str = "localhost",
-    port: int = 8080,
+    host: str = HOST,
+    port: int = PORT,
 ) -> None:
     """Convenience function to run a WebSocket LSP server.
 

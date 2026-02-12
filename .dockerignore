@@ -1,0 +1,14 @@
+.git
+.gitignore
+.venv
+.vscode
+.github
+__pycache__
+*.pyc
+*.pyo
+examples
+README.md
+CLAUDE.md
+Dockerfile
+.dockerignore
+lspyc.yaml.example

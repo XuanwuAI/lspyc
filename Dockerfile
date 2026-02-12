@@ -1,6 +1,10 @@
 FROM python:3.12-alpine
 
-RUN sed -i 's#https\?://dl-cdn.alpinelinux.org/alpine#https://mirrors.tuna.tsinghua.edu.cn/alpine#g' /etc/apk/repositories
+ARG USE_MIRROR=true
+
+RUN if [ "$USE_MIRROR" = "true" ]; then \
+      sed -i 's#https\?://dl-cdn.alpinelinux.org/alpine#https://mirrors.tuna.tsinghua.edu.cn/alpine#g' /etc/apk/repositories; \
+    fi
 RUN apk update
 
 # Install build dependencies and tools
@@ -24,12 +28,12 @@ RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
 ENV PATH=/root/.cargo/bin:$PATH
 RUN rustup component add rust-analyzer rust-src
 
-# Configure pip mirror
-ENV PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
-ENV PIP_TRUSTED_HOST=pypi.tuna.tsinghua.edu.cn
-
 # Install Python LSP
-RUN pip install --no-cache-dir pyright
+RUN if [ "$USE_MIRROR" = "true" ]; then \
+      pip install --no-cache-dir pyright -i https://pypi.tuna.tsinghua.edu.cn/simple --trusted-host pypi.tuna.tsinghua.edu.cn; \
+    else \
+      pip install --no-cache-dir pyright; \
+    fi
 
 # Install TypeScript LSP
 RUN npm install -g typescript-language-server
@@ -41,7 +45,11 @@ RUN chmod +x /usr/local/share/kotlin/server/bin/kotlin-language-server
 ENV PATH=/usr/local/share/kotlin/server/bin:$PATH
 
 # Install uv
-RUN pip install uv
+RUN if [ "$USE_MIRROR" = "true" ]; then \
+      pip install uv -i https://pypi.tuna.tsinghua.edu.cn/simple --trusted-host pypi.tuna.tsinghua.edu.cn; \
+    else \
+      pip install uv; \
+    fi
 
 # Copy project to /app directory
 WORKDIR /app

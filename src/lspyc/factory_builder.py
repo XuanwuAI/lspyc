@@ -60,7 +60,7 @@ def build_factories(
             lang: DockerHandleFactory(factory.command, **docker_conf.model_dump())
             for lang, factory in DEFAULT_NATIVE_FACTORIES.items()
         }
-    if ty == "websocket":
+    if ty == "ws":
         assert ws_conf is not None
         return {
             lang: WebSocketHandleFactory(ws_conf.base_url, factory.command[0])

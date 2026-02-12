@@ -17,6 +17,16 @@ from websockets.http11 import Response
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 
+# Add console handler if no handlers are configured
+if not logger.handlers:
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(logging.DEBUG)
+    formatter = logging.Formatter(
+        '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    )
+    console_handler.setFormatter(formatter)
+    logger.addHandler(console_handler)
+
 
 class ClientConnection:
     """Manages a single WebSocket client connection and its LSP server process.

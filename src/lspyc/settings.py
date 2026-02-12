@@ -8,7 +8,7 @@ FactoryTypes: TypeAlias = Literal["native", "docker", "ws", "auto", "file"]
 
 
 class WsHandleSettings(BaseSettings):
-    base_url: str
+    base_url: str = "ws://localhost:8080"
     connect_timeout: float = 10.0
     reconnect_delay: float = 1.0
     max_reconnect_attempts: int = -1
@@ -47,6 +47,6 @@ class LspycSettings(BaseSettings):
 
     docker_factory: DockerHandleSettings = DockerHandleSettings()
 
-    ws_factory: WsHandleSettings | None = None
+    ws_factory: WsHandleSettings = WsHandleSettings()
 
     factory_file: str | None = None

@@ -51,7 +51,6 @@ def build_factories(
     ws_conf: WsHandleSettings | None = None,
     factory_conf_file: str | None = None,
 ) -> dict[str, HandleFactory]:
-    print(f"Building factories with type {ty}")
     if ty == "native":
         return DEFAULT_NATIVE_FACTORIES  # type: ignore
     if ty == "docker":
@@ -63,7 +62,15 @@ def build_factories(
     if ty == "ws":
         assert ws_conf is not None
         return {
-            lang: WebSocketHandleFactory(ws_conf.base_url, factory.command[0])
+            lang: WebSocketHandleFactory(
+                ws_conf.base_url,
+                factory.command[0],
+                connect_timeout=ws_conf.connect_timeout,
+                reconnect_delay=ws_conf.reconnect_delay,
+                max_reconnect_attempts=ws_conf.max_reconnect_attempts,
+                local_mount_prefix=ws_conf.local_mount_prefix,
+                remote_mount_prefix=ws_conf.remote_mount_prefix,
+            )
             for lang, factory in DEFAULT_NATIVE_FACTORIES.items()
         }
     if ty == "auto":
@@ -80,7 +87,15 @@ def build_factories(
                 )
             if ws_conf:
                 candidates.append(
-                    WebSocketHandleFactory(ws_conf.base_url, factory.command[0]),
+                    WebSocketHandleFactory(
+                        ws_conf.base_url,
+                        factory.command[0],
+                        connect_timeout=ws_conf.connect_timeout,
+                        reconnect_delay=ws_conf.reconnect_delay,
+                        max_reconnect_attempts=ws_conf.max_reconnect_attempts,
+                        local_mount_prefix=ws_conf.local_mount_prefix,
+                        remote_mount_prefix=ws_conf.remote_mount_prefix,
+                    ),
                 )
             m[lang] = AutoHandleFactory(candidates)
         return m

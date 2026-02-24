@@ -172,7 +172,6 @@ class LspWsHandle(LspHandle):
             try:
                 await self._connect()
                 self._state = ServerState.RUNNING
-                print("Reconnected")
                 return
             except Exception:
                 self._reconnect_attempts += 1

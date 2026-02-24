@@ -225,6 +225,8 @@ class WebSocketHandleFactory(HandleFactory):
         connect_timeout: float = 10.0,
         reconnect_delay: float = 2.0,
         max_reconnect_attempts: int = -1,
+        local_mount_prefix: str | None = None,
+        remote_mount_prefix: str | None = None,
     ) -> None:
         """Initialize the WebSocket handle factory.
 
@@ -234,6 +236,8 @@ class WebSocketHandleFactory(HandleFactory):
             connect_timeout: Connection timeout in seconds
             reconnect_delay: Delay between reconnection attempts in seconds
             max_reconnect_attempts: Maximum reconnection attempts (-1 for infinite)
+            local_mount_prefix: Local NFS mount prefix (e.g., "/mnt/nfs")
+            remote_mount_prefix: Remote NFS mount prefix (e.g., "/data/nfs")
         """
         assert url and url.startswith(
             ("ws://", "wss://")
@@ -244,6 +248,8 @@ class WebSocketHandleFactory(HandleFactory):
         self.connect_timeout = connect_timeout
         self.reconnect_delay = reconnect_delay
         self.max_reconnect_attempts = max_reconnect_attempts
+        self.local_mount_prefix = local_mount_prefix.rstrip("/") if local_mount_prefix else None
+        self.remote_mount_prefix = remote_mount_prefix.rstrip("/") if remote_mount_prefix else None
 
     async def validate(self) -> tuple[bool, str | None]:
         """Check if WebSocket URL is reachable.
@@ -271,13 +277,30 @@ class WebSocketHandleFactory(HandleFactory):
         except Exception as e:
             return False, f"Failed to connect to {self.url}: {e}"
 
+    def _remap_workspace(self, workspace_root: str) -> str:
+        """Remap local workspace path to remote path using mount prefixes.
+
+        If mount prefixes are configured and workspace_root starts with
+        local_mount_prefix, replaces the prefix with remote_mount_prefix.
+        Otherwise returns workspace_root unchanged.
+        """
+        if self.local_mount_prefix and self.remote_mount_prefix:
+            stripped = workspace_root.rstrip("/")
+            if stripped == self.local_mount_prefix or stripped.startswith(
+                self.local_mount_prefix + "/"
+            ):
+                return self.remote_mount_prefix + stripped[len(self.local_mount_prefix) :]
+        return workspace_root
+
     async def create(self, workspace_root: str) -> LspHandle:
         is_valid, error = await self.validate()
         if not is_valid:
             raise RuntimeError(f"Cannot create handle: {error}")
 
+        remapped = self._remap_workspace(workspace_root)
+
         return LspWsHandle(
-            workspace_root=workspace_root,
+            workspace_root=remapped,
             url=self.url,
             headers=self.headers,
             connect_timeout=self.connect_timeout,
@@ -302,6 +325,5 @@ class AutoHandleFactory(HandleFactory):
     async def create(self, workspace_root: str) -> LspHandle:
         for candidate in self.candidates:
             if await candidate.validate():
-                print(f"Using {candidate.__class__.__name__} handle factory")
                 return await candidate.create(workspace_root)
         raise RuntimeError("No valid handle factory found")

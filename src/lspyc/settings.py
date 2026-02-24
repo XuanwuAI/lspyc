@@ -2,6 +2,7 @@
 
 from typing import Literal, TypeAlias
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings
 
 FactoryTypes: TypeAlias = Literal["native", "docker", "ws", "auto", "file"]
@@ -12,6 +13,16 @@ class WsHandleSettings(BaseSettings):
     connect_timeout: float = 10.0
     reconnect_delay: float = 1.0
     max_reconnect_attempts: int = -1
+    local_mount_prefix: str | None = None
+    remote_mount_prefix: str | None = None
+
+    @model_validator(mode="after")
+    def _check_mount_prefixes(self) -> "WsHandleSettings":
+        if (self.local_mount_prefix is None) != (self.remote_mount_prefix is None):
+            raise ValueError(
+                "local_mount_prefix and remote_mount_prefix must both be set or both be None"
+            )
+        return self
 
 
 class DockerHandleSettings(BaseSettings):

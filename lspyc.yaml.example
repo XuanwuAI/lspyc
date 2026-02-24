@@ -56,3 +56,14 @@ language_factories:
   #   connect_timeout: 15.0
   #   reconnect_delay: 2.0
   #   max_reconnect_attempts: -1  # -1 for infinite
+
+  # Example: WebSocket with NFS path remapping
+  # When client and server mount the same NFS share at different paths,
+  # use local_mount_prefix and remote_mount_prefix to translate paths.
+  # e.g., client mounts at /mnt/nfs, server mounts at /data/nfs
+  # remote_python_nfs:
+  #   type: ws
+  #   url: ws://remote-server:8080
+  #   server_name: pyright-langserver
+  #   local_mount_prefix: /mnt/nfs
+  #   remote_mount_prefix: /data/nfs

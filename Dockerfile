@@ -36,7 +36,7 @@ RUN if [ "$USE_MIRROR" = "true" ]; then \
     fi
 
 # Install TypeScript LSP
-RUN npm install -g typescript-language-server
+RUN npm install -g typescript-language-server typescript
 
 # Install Kotlin LSP
 RUN wget -O /tmp/kotlin-lsp.zip https://github.com/fwcd/kotlin-language-server/releases/download/1.3.13/server.zip

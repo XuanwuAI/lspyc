@@ -52,6 +52,7 @@ class LspycSettings(BaseSettings):
     model_config = {
         "env_prefix": "LSPYC_",
         "case_sensitive": False,
+        "env_nested_delimiter": "__",
     }
 
     factory_ty: FactoryTypes = "auto"

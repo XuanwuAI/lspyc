@@ -114,6 +114,49 @@ class ThreadedClient:
             self._inner.get_references(file_path, line, character, include_declaration)
         )
 
+    def batch_get_document_symbols(
+        self,
+        file_paths: list[str],
+        max_concurrency: int | None = None,
+    ) -> dict[str, list[DocumentSymbol]]:
+        """Get document symbols for multiple files concurrently.
+
+        Args:
+            file_paths: List of absolute file paths to process.
+            max_concurrency: Maximum number of concurrent LSP requests.
+                When set, an asyncio.Semaphore throttles in-flight calls.
+                None means unlimited concurrency.
+
+        Returns:
+            Dict mapping file_path → list of DocumentSymbol.
+            Files that fail or return no symbols are omitted.
+        """
+
+        async def _batch() -> dict[str, list[DocumentSymbol]]:
+            sem = asyncio.Semaphore(max_concurrency) if max_concurrency else None
+
+            async def _get_one(path: str) -> tuple[str, list[DocumentSymbol]]:
+                if sem:
+                    async with sem:
+                        symbols = await self._inner.get_document_symbols(path)
+                        return (path, symbols)
+                symbols = await self._inner.get_document_symbols(path)
+                return (path, symbols)
+
+            results = await asyncio.gather(
+                *[_get_one(p) for p in file_paths],
+                return_exceptions=True,
+            )
+            return {
+                path: syms
+                for r in results
+                if not isinstance(r, BaseException)
+                for path, syms in [r]
+                if syms
+            }
+
+        return self.run_sync(_batch())
+
     def shutdown(self) -> None:
         """Shutdown the inner client, stop the background loop, and join the thread."""
         if not self._loop.is_running():

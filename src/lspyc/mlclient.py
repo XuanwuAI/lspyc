@@ -354,6 +354,8 @@ class MutilLangClient:
 
         self._handles.clear()
         self._initialization_locks.clear()
+        for tracker in self._quiescence_trackers.values():
+            await tracker.close()
         self._quiescence_trackers.clear()
 
     async def _on_request(self, handle: LspHandle, message: JsonRpcMessage) -> None:
@@ -503,14 +505,13 @@ class MutilLangClient:
             ValueError: If no factory is configured for the language
             RuntimeError: If factory validation fails or handle creation fails
         """
-        if language in self._handles:
-            return self._handles[language]
-
         if language not in self._initialization_locks:
             self._initialization_locks[language] = asyncio.Lock()
 
         # Ensure only one coroutine initializes the handle at a time
         async with self._initialization_locks[language]:
+            if language in self._handles:
+                return self._handles[language]
             # Get factory for this language
             factory = self._language_factories.get(language)
             if factory is None:

@@ -71,6 +71,7 @@ class LspWsHandle(LspHandle):
         except Exception:
             self._state = ServerState.STOPPED
             raise
+        assert self._receive_task is None
         self._receive_task = asyncio.create_task(self._receive_loop())
 
         capabilities = await self.initialize(workspace_root=self._workspace_root)
@@ -82,10 +83,12 @@ class LspWsHandle(LspHandle):
         if self._state == ServerState.STOPPED:
             return
         self._should_reconnect = False
-        await self._disconnect(timeout=timeout)
         self._state = ServerState.STOPPED
+        assert self._receive_task is not None
         if self._receive_task:
             self._receive_task.cancel()
+            await asyncio.gather(self._receive_task, return_exceptions=True)
+        self._cancel_pending_responses()
 
     async def _send_raw_message(self, message: dict[str, Any]) -> None:
         """Send a raw message through WebSocket with Content-Length header.
@@ -160,9 +163,12 @@ class LspWsHandle(LspHandle):
                     await self._handle_message(message)
             except ConnectionClosed:
                 await self._handle_disconnect()
+            except asyncio.CancelledError:
+                await self._disconnect()
+                raise
             except Exception:
                 # TODO: handle unexpected errors
-                pass
+                raise
 
     async def _handle_disconnect(self) -> None:
         """Handle disconnection and attempt reconnection if appropriate."""

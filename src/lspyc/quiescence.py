@@ -102,3 +102,9 @@ class QuiescenceTracker:
         except asyncio.CancelledError:
             # Task was cancelled, which is normal
             pass
+
+    async def close(self) -> None:
+        """Clean up resources."""
+        if self._grace_task and not self._grace_task.done():
+            self._grace_task.cancel()
+            await self._grace_task

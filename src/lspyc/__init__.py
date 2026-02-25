@@ -16,6 +16,7 @@ from .handle import (
 from .handle.protocol import DocumentSymbol, Location
 from .mlclient import MutilLangClient
 from .settings import LspycSettings
+from .threaded import ThreadedClient
 
 __version__ = "0.1.0"
 __all__ = [
@@ -30,6 +31,7 @@ __all__ = [
     "LspWsHandle",
     "LspycSettings",
     "MutilLangClient",
+    "ThreadedClient",
     "build_lang_factories_from_dict",
     "build_lang_factories_from_file",
 ]

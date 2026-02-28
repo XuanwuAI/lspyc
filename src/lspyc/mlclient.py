@@ -302,9 +302,6 @@ class MutilLangClient:
                 )
                 return result
         except Exception as e:
-            import logging
-            logger = logging.getLogger(__name__)
-            logger.error(f"Failed to get document symbols for {file_path}: {e} ({type(e)})")
             return []
 
     async def get_definition(

@@ -459,6 +459,15 @@ class MutilLangClient:
                     elif kind == "end":
                         await tracker.mark_work_ended(str(token))
 
+        elif method == "language/status":
+            # jdtls sends language/status during initialization.
+            # Treat each message as activity to reset the grace period timer.
+            tracker = self._get_tracker_for_handle(handle)
+            if tracker:
+                token = "__language_status__"
+                await tracker.mark_work_started(token)
+                await tracker.mark_work_ended(token)
+
     def _get_tracker_for_handle(self, handle: LspHandle) -> QuiescenceTracker | None:
         """Get the quiescence tracker for a given handle.
 
@@ -588,7 +597,9 @@ class MutilLangClient:
             await handle.start()
             # Wait for server to finish initial indexing
             await tracker.wait_for_quiescence(
-                timeout=self._settings.quiescence_timeout,
+                # Give a long timeout for initialization
+                # Some lsp server (jdtls) requires a long time to index
+                timeout=self._settings.quiescence_timeout * 10,
             )
             return handle
 

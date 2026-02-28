@@ -28,15 +28,9 @@ RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
 ENV PATH=/root/.cargo/bin:$PATH
 RUN rustup component add rust-analyzer rust-src
 
-# Install Python LSP
-RUN if [ "$USE_MIRROR" = "true" ]; then \
-      pip install --no-cache-dir pyright -i https://pypi.tuna.tsinghua.edu.cn/simple --trusted-host pypi.tuna.tsinghua.edu.cn; \
-    else \
-      pip install --no-cache-dir pyright; \
-    fi
-
 # Install TypeScript LSP
 RUN npm install -g typescript-language-server typescript
+RUN npm install -g pyright
 
 # Install Kotlin LSP
 RUN wget -O /tmp/kotlin-lsp.zip https://github.com/fwcd/kotlin-language-server/releases/download/1.3.13/server.zip

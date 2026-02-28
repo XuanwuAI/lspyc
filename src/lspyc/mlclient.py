@@ -3,8 +3,9 @@
 import asyncio
 import os
 from collections import OrderedDict
+from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Mapping
+from typing import AsyncIterator, Mapping
 
 from .factory_builder import build_factories
 from .handle import HandleFactory, LspHandle
@@ -28,9 +29,65 @@ class OpenFileManager:
             quiescence_timeout: Timeout for wait_for_quiescence operations in seconds
         """
         self._open_files: OrderedDict[str, tuple[LspHandle, str]] = OrderedDict()
+        self._in_use: dict[str, int] = {}  # uri → active ref count
         self._max_open_files = max_open_files
         self._quiescence_timeout = quiescence_timeout
-        self._lock = asyncio.Lock()
+        self._cond = asyncio.Condition()
+
+    @asynccontextmanager
+    async def use_file(
+        self,
+        handle: LspHandle,
+        abs_path: str,
+        uri: str,
+        language: str,
+        content: str | None = None,
+        tracker: QuiescenceTracker | None = None,
+    ) -> AsyncIterator[None]:
+        """Open a file with ref-counted eviction protection.
+
+        While the context manager is held, the file cannot be evicted by LRU.
+        """
+        needs_quiescence = False
+        async with self._cond:
+            while True:
+                # Case 1: Already open — bump ref count + LRU position
+                if uri in self._open_files:
+                    self._open_files.move_to_end(uri)
+                    self._in_use[uri] = self._in_use.get(uri, 0) + 1
+                    break
+
+                # Case 2: Below limit — open directly
+                if len(self._open_files) < self._max_open_files:
+                    await self._do_open(handle, abs_path, uri, language, content)
+                    self._in_use[uri] = 1
+                    needs_quiescence = True
+                    break
+
+                # Case 3: At limit — try evicting a non-in-use file
+                evicted = self._find_evictable()
+                if evicted is not None:
+                    await self._do_close(evicted)
+                    await self._do_open(handle, abs_path, uri, language, content)
+                    self._in_use[uri] = 1
+                    needs_quiescence = True
+                    break
+
+                # Case 4: All files in-use — wait for a release
+                await self._cond.wait()
+
+        # Quiescence wait outside the lock (can be slow)
+        if needs_quiescence and tracker:
+            await tracker.wait_for_quiescence(timeout=self._quiescence_timeout)
+
+        try:
+            yield
+        finally:
+            async with self._cond:
+                self._in_use[uri] -= 1
+                if self._in_use[uri] <= 0:
+                    del self._in_use[uri]
+                self._cond.notify_all()
 
     async def ensure_file_open(
         self,
@@ -43,58 +100,21 @@ class OpenFileManager:
     ) -> None:
         """Ensure a file is open, opening it if necessary and managing LRU eviction.
 
-        Args:
-            handle: The LSP handle for the file's language
-            abs_path: Absolute path to the file
-            uri: File URI
-            language: Language ID
-            content: Optional file content. If None, reads from file system
-            tracker: Optional quiescence tracker to wait for server readiness after opening
+        Note: This method does NOT provide eviction protection. Prefer use_file()
+        for queries that need the file to remain open.
         """
-        async with self._lock:
-            # If file is already open, just mark it as used
+        async with self._cond:
             if uri in self._open_files:
-                self.mark_file_used(uri)
+                self._open_files.move_to_end(uri)
                 return
 
-            # If at capacity, evict the least recently used file
             if len(self._open_files) >= self._max_open_files:
                 await self._evict_lru()
 
-            # Read file content if not provided
-            if content is None:
-                with open(abs_path, "r", encoding="utf-8") as f:
-                    content = f.read()
+            await self._do_open(handle, abs_path, uri, language, content)
 
-            # Open the file
-            await handle.send_notification(
-                method="textDocument/didOpen",
-                params={
-                    "textDocument": {
-                        "uri": uri,
-                        "languageId": language,
-                        "version": 1,
-                        "text": content,
-                    }
-                },
-            )
-
-            # Track the opened file
-            self._open_files[uri] = (handle, language)
-
-        # Wait for quiescence outside the lock (if file was just opened)
         if tracker:
             await tracker.wait_for_quiescence(timeout=self._quiescence_timeout)
-
-    def mark_file_used(self, uri: str) -> None:
-        """Mark a file as recently used, moving it to the end of the LRU queue.
-
-        Args:
-            uri: File URI
-        """
-        if uri in self._open_files:
-            # Move to end (most recently used)
-            self._open_files.move_to_end(uri)
 
     async def close_file(self, uri: str) -> None:
         """Close a specific file.
@@ -102,35 +122,67 @@ class OpenFileManager:
         Args:
             uri: File URI to close
         """
+        async with self._cond:
+            await self._do_close(uri)
+
+    async def close_all(self) -> None:
+        """Close all open files."""
+        async with self._cond:
+            uris = list(self._open_files.keys())
+            for uri in uris:
+                try:
+                    await self._do_close(uri)
+                except Exception:
+                    pass
+            self._in_use.clear()
+
+    async def _do_open(
+        self,
+        handle: LspHandle,
+        abs_path: str,
+        uri: str,
+        language: str,
+        content: str | None = None,
+    ) -> None:
+        """Send didOpen notification. Must be called with self._cond held."""
+        if content is None:
+            with open(abs_path, "r", encoding="utf-8") as f:
+                content = f.read()
+        await handle.send_notification(
+            method="textDocument/didOpen",
+            params={
+                "textDocument": {
+                    "uri": uri,
+                    "languageId": language,
+                    "version": 1,
+                    "text": content,
+                }
+            },
+        )
+        self._open_files[uri] = (handle, language)
+
+    async def _do_close(self, uri: str) -> None:
+        """Send didClose notification and remove tracking. Must be called with self._cond held."""
         if uri in self._open_files:
             handle, _ = self._open_files[uri]
-
-            # Send didClose notification
             await handle.send_notification(
                 method="textDocument/didClose",
                 params={"textDocument": {"uri": uri}},
             )
-
-            # Remove from tracking
             del self._open_files[uri]
 
-    async def close_all(self) -> None:
-        """Close all open files."""
-        # Create a list of URIs to avoid modifying dict during iteration
-        uris = list(self._open_files.keys())
-        for uri in uris:
-            try:
-                await self.close_file(uri)
-            except Exception:
-                # Continue closing other files even if one fails
-                pass
+    def _find_evictable(self) -> str | None:
+        """Find the LRU file that is NOT in-use. Returns uri or None."""
+        for uri in self._open_files:
+            if uri not in self._in_use:
+                return uri
+        return None
 
     async def _evict_lru(self) -> None:
-        """Evict the least recently used file."""
-        if self._open_files:
-            # Get the first item (least recently used)
-            lru_uri = next(iter(self._open_files))
-            await self.close_file(lru_uri)
+        """Evict the least recently used file that is not in-use."""
+        evicted = self._find_evictable()
+        if evicted is not None:
+            await self._do_close(evicted)
 
 
 class MutilLangClient:
@@ -239,18 +291,20 @@ class MutilLangClient:
             RuntimeError: If the operation fails
         """
         try:
-            handle, uri = await self._prepare_query(file_path)
-            result: list[DocumentSymbol] = (
-                await handle.send_request(
-                    method="textDocument/documentSymbol",
-                    params={"textDocument": {"uri": uri}},
-                    timeout=self._settings.lsp_request_timeout,
+            async with self._prepare_query(file_path) as (handle, uri):
+                result: list[DocumentSymbol] = (
+                    await handle.send_request(
+                        method="textDocument/documentSymbol",
+                        params={"textDocument": {"uri": uri}},
+                        timeout=self._settings.lsp_request_timeout,
+                    )
+                    or []
                 )
-                or []
-            )
-            return result
-        except Exception:
-            # TODO: log
+                return result
+        except Exception as e:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Failed to get document symbols for {file_path}: {e} ({type(e)})")
             return []
 
     async def get_definition(
@@ -271,24 +325,24 @@ class MutilLangClient:
             RuntimeError: If the operation fails
         """
         try:
-            handle, uri = await self._prepare_query(file_path)
-            result: list[Location] = []
-            _result = await handle.send_request(
-                method="textDocument/definition",
-                params={
-                    "textDocument": {"uri": uri},
-                    "position": {"line": line, "character": character},
-                },
-                timeout=self._settings.lsp_request_timeout,
-            )
-            # Normalize result to always be a list
-            if _result is None:
-                return []
-            elif isinstance(_result, list):
-                result = _result
-            else:
-                result = [_result]
-            return [self._localize_loc(loc, handle) for loc in result]
+            async with self._prepare_query(file_path) as (handle, uri):
+                result: list[Location] = []
+                _result = await handle.send_request(
+                    method="textDocument/definition",
+                    params={
+                        "textDocument": {"uri": uri},
+                        "position": {"line": line, "character": character},
+                    },
+                    timeout=self._settings.lsp_request_timeout,
+                )
+                # Normalize result to always be a list
+                if _result is None:
+                    return []
+                elif isinstance(_result, list):
+                    result = _result
+                else:
+                    result = [_result]
+                return [self._localize_loc(loc, handle) for loc in result]
         except Exception:
             # TODO: log
             return []
@@ -316,20 +370,20 @@ class MutilLangClient:
             RuntimeError: If the operation fails
         """
         try:
-            handle, uri = await self._prepare_query(file_path)
-            result: list[Location] = (
-                await handle.send_request(
-                    method="textDocument/references",
-                    params={
-                        "textDocument": {"uri": uri},
-                        "position": {"line": line, "character": character},
-                        "context": {"includeDeclaration": include_declaration},
-                    },
-                    timeout=self._settings.lsp_request_timeout,
+            async with self._prepare_query(file_path) as (handle, uri):
+                result: list[Location] = (
+                    await handle.send_request(
+                        method="textDocument/references",
+                        params={
+                            "textDocument": {"uri": uri},
+                            "position": {"line": line, "character": character},
+                            "context": {"includeDeclaration": include_declaration},
+                        },
+                        timeout=self._settings.lsp_request_timeout,
+                    )
+                    or []
                 )
-                or []
-            )
-            return [self._localize_loc(loc, handle) for loc in result]
+                return [self._localize_loc(loc, handle) for loc in result]
         except Exception:
             # TODO: log
             return []
@@ -428,7 +482,8 @@ class MutilLangClient:
         loc["uri"] = Path(self._resolve_file_path(rel_path)).as_uri()
         return loc
 
-    async def _prepare_query(self, file_path: str) -> tuple[LspHandle, str]:
+    @asynccontextmanager
+    async def _prepare_query(self, file_path: str) -> AsyncIterator[tuple[LspHandle, str]]:
         abs_path = self._resolve_file_path(file_path)
         language = self._detect_language(abs_path)
         if language is None:
@@ -437,10 +492,10 @@ class MutilLangClient:
         uri = handle.build_uri(self._get_relative_path(abs_path))
 
         tracker = self._quiescence_trackers.get(language)
-        await self._file_manager.ensure_file_open(
+        async with self._file_manager.use_file(
             handle, abs_path, uri, language, tracker=tracker
-        )
-        return handle, uri
+        ):
+            yield handle, uri
 
     def _detect_language(self, file_path: str) -> str | None:
         """Detect the language ID from a file path.

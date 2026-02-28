@@ -187,7 +187,7 @@ class DockerHandleFactory(HandleFactory):
         is_valid, error = await self.validate()
         if not is_valid:
             raise RuntimeError(f"Cannot create handle: {error}")
-
+        
         # Build docker run command
         docker_command = [
             "docker",
@@ -293,10 +293,6 @@ class WebSocketHandleFactory(HandleFactory):
         return workspace_root
 
     async def create(self, workspace_root: str) -> LspHandle:
-        is_valid, error = await self.validate()
-        if not is_valid:
-            raise RuntimeError(f"Cannot create handle: {error}")
-
         remapped = self._remap_workspace(workspace_root)
 
         return LspWsHandle(

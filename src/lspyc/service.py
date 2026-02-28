@@ -96,17 +96,13 @@ class ClientConnection:
             ]
 
             # Wait for any task to complete (usually means disconnection)
-            done, pending = await asyncio.wait(
+            await asyncio.wait(
                 self._tasks,
                 return_when=asyncio.FIRST_COMPLETED,
             )
 
-            # Cancel remaining tasks
-            for task in pending:
-                task.cancel()
-
-            # Wait for cancelled tasks to finish
-            await asyncio.gather(*pending, return_exceptions=True)
+            # TODO: replace this with a better way to wait for stderr to be logged
+            await asyncio.sleep(1)
 
         except Exception as e:
             logger.error(f"[Client {self.client_id}] Error: {e}", exc_info=True)
@@ -131,19 +127,24 @@ class ClientConnection:
             await asyncio.gather(*self._tasks, return_exceptions=True)
 
         # Terminate process
-        if self.process and self.process.returncode is None:
-            try:
-                self.process.terminate()
-                await asyncio.wait_for(self.process.wait(), timeout=5.0)
-                logger.info(f"[Client {self.client_id}] Process terminated")
-            except asyncio.TimeoutError:
-                logger.warning(
-                    f"[Client {self.client_id}] Process didn't terminate, killing"
+        if self.process:
+            if self.process.returncode is not None:
+                logger.error(
+                    f"[Client {self.client_id}] terminated with returncode {self.process.returncode}"
                 )
-                self.process.kill()
-                await self.process.wait()
-            except Exception as e:
-                logger.warning(f"[Client {self.client_id}] Error stopping process: {e}")
+            else:
+                try:
+                    self.process.terminate()
+                    await asyncio.wait_for(self.process.wait(), timeout=5.0)
+                    logger.info(f"[Client {self.client_id}] Process terminated")
+                except asyncio.TimeoutError:
+                    logger.warning(
+                        f"[Client {self.client_id}] Process didn't terminate, killing"
+                    )
+                    self.process.kill()
+                    await self.process.wait()
+                except Exception as e:
+                    logger.warning(f"[Client {self.client_id}] Error stopping process: {e}")
 
         # Close WebSocket
         try:

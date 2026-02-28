@@ -37,13 +37,13 @@ class LspycSettings(BaseSettings):
     For example, set LSPYC_MAX_OPEN_FILES=50 to change max_open_files.
     """
 
-    max_open_files: int = 20
+    max_open_files: int = 10
     """Maximum number of files to keep open concurrently"""
 
-    grace_period: float = 1.0
+    grace_period: float = 5.0
     """Quiescence tracker grace period in seconds"""
 
-    quiescence_timeout: float = 10.0
+    quiescence_timeout: float = 50.0
     """Timeout for wait_for_quiescence operations in seconds"""
 
     lsp_request_timeout: float = 10.0

@@ -178,6 +178,7 @@ class LspWsHandle(LspHandle):
             try:
                 await self._connect()
                 self._state = ServerState.RUNNING
+                await self.initialize(workspace_root=self._workspace_root)
                 return
             except Exception:
                 self._reconnect_attempts += 1

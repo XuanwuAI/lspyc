@@ -233,7 +233,7 @@ class LspHandle(ABC):
 
         # Construct initialization parameters
         init_params = {
-            "processId": os.getpid(),
+            "processId": 1,
             "rootUri": root_uri,
             # Required by pyright (though lsp spec states that rootUri wins over rootPath)
             "rootPath": workspace_root,

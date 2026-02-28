@@ -583,11 +583,15 @@ class MutilLangClient:
                 handle.request_handler = self._on_request
             if handle.notification_handler is None:
                 handle.notification_handler = self._on_notification
-            await handle.start()
+            # Create quiescence tracker BEFORE start so progress events
+            # emitted during initialization are captured
+            tracker = QuiescenceTracker(grace_period=self._settings.grace_period)
+            self._quiescence_trackers[language] = tracker
             self._handles[language] = handle
-            # Create quiescence tracker for this language
-            self._quiescence_trackers[language] = QuiescenceTracker(
-                grace_period=self._settings.grace_period
+            await handle.start()
+            # Wait for server to finish initial indexing
+            await tracker.wait_for_quiescence(
+                timeout=self._settings.quiescence_timeout,
             )
             return handle
 

@@ -1,6 +1,7 @@
 """LSP Manager for handling multiple language servers."""
 
 import asyncio
+import logging
 import os
 from collections import OrderedDict
 from contextlib import asynccontextmanager
@@ -12,6 +13,8 @@ from .handle import HandleFactory, LspHandle
 from .handle.protocol import DocumentSymbol, JsonRpcMessage, Location
 from .quiescence import QuiescenceTracker
 from .settings import LspycSettings
+
+logger = logging.getLogger(__name__)
 
 
 class OpenFileManager:
@@ -302,6 +305,9 @@ class MutilLangClient:
                 )
                 return result
         except Exception as e:
+            logger.error(
+                f"get_document_symbols failed for {file_path}: {e} ({type(e)})"
+            )
             return []
 
     async def get_definition(
@@ -340,8 +346,11 @@ class MutilLangClient:
                 else:
                     result = [_result]
                 return [self._localize_loc(loc, handle) for loc in result]
-        except Exception:
-            # TODO: log
+        except Exception as e:
+            logger.error(
+                f"get_definition failed for {file_path} "
+                f"(line: {line}, character: {character}): {e} ({type(e)})"
+            )
             return []
 
     async def get_references(
@@ -381,8 +390,11 @@ class MutilLangClient:
                     or []
                 )
                 return [self._localize_loc(loc, handle) for loc in result]
-        except Exception:
-            # TODO: log
+        except Exception as e:
+            logger.error(
+                f"get_references failed for {file_path} "
+                f"(line: {line}, character: {character}): {e} ({type(e)})"
+            )
             return []
 
     async def shutdown(self, timeout: float | None = None) -> None:

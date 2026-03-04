@@ -46,11 +46,8 @@ class LspHandle(ABC):
         return str(path.relative_to(workspace))
 
     @abstractmethod
-    async def start(self) -> dict[str, Any] | None:
+    async def start(self) -> None:
         """Start the LSP server/connection.
-
-        Returns:
-            Server capabilities if auto-initialized, None otherwise
 
         Raises:
             RuntimeError: If the server is already running
@@ -315,7 +312,7 @@ class LspHandle(ABC):
             await self.notification_handler(self, message)
 
     def _cancel_pending_responses(self) -> None:
-        """Cancel all pending responses."""
+        """Cancel all pending responses"""
         for future in self._pending_responses.values():
             if not future.done():
                 future.cancel()
@@ -351,11 +348,8 @@ class LspStdioHandle(LspHandle):
         self._env = env
         self._buffer = b""
 
-    async def start(self) -> dict[str, Any] | None:
+    async def start(self) -> None:
         """Start the LSP server process.
-
-        Returns:
-            Server capabilities if auto-initialized, None otherwise
 
         Raises:
             RuntimeError: If the server is already running
@@ -370,10 +364,6 @@ class LspStdioHandle(LspHandle):
             on_stdout=self._on_stdout,
             on_stderr=self._on_stderr,
         )
-
-        capabilities = await self.initialize(workspace_root=self._workspace_root)
-        self._server_capabilities = capabilities
-        return capabilities
 
     async def stop(self, timeout: float = 5.0) -> None:
         """Stop the LSP server process.

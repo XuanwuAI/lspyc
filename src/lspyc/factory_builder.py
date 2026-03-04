@@ -66,8 +66,6 @@ def build_factories(
                 ws_conf.base_url,
                 factory.command[0],
                 connect_timeout=ws_conf.connect_timeout,
-                reconnect_delay=ws_conf.reconnect_delay,
-                max_reconnect_attempts=ws_conf.max_reconnect_attempts,
                 local_mount_prefix=ws_conf.local_mount_prefix,
                 remote_mount_prefix=ws_conf.remote_mount_prefix,
             )
@@ -91,8 +89,6 @@ def build_factories(
                         ws_conf.base_url,
                         factory.command[0],
                         connect_timeout=ws_conf.connect_timeout,
-                        reconnect_delay=ws_conf.reconnect_delay,
-                        max_reconnect_attempts=ws_conf.max_reconnect_attempts,
                         local_mount_prefix=ws_conf.local_mount_prefix,
                         remote_mount_prefix=ws_conf.remote_mount_prefix,
                     ),

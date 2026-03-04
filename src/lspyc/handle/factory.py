@@ -223,8 +223,6 @@ class WebSocketHandleFactory(HandleFactory):
         server_name: str,
         headers: dict[str, str] | None = None,
         connect_timeout: float = 10.0,
-        reconnect_delay: float = 2.0,
-        max_reconnect_attempts: int = -1,
         local_mount_prefix: str | None = None,
         remote_mount_prefix: str | None = None,
     ) -> None:
@@ -232,10 +230,9 @@ class WebSocketHandleFactory(HandleFactory):
 
         Args:
             url: WebSocket URL (ws:// or wss://)
+            server_name: Name of the LSP server endpoint
             headers: Optional headers for WebSocket connection
             connect_timeout: Connection timeout in seconds
-            reconnect_delay: Delay between reconnection attempts in seconds
-            max_reconnect_attempts: Maximum reconnection attempts (-1 for infinite)
             local_mount_prefix: Local NFS mount prefix (e.g., "/mnt/nfs")
             remote_mount_prefix: Remote NFS mount prefix (e.g., "/data/nfs")
         """
@@ -246,8 +243,6 @@ class WebSocketHandleFactory(HandleFactory):
         self.url = urljoin(url, server_name)
         self.headers = headers
         self.connect_timeout = connect_timeout
-        self.reconnect_delay = reconnect_delay
-        self.max_reconnect_attempts = max_reconnect_attempts
         self.local_mount_prefix = local_mount_prefix.rstrip("/") if local_mount_prefix else None
         self.remote_mount_prefix = remote_mount_prefix.rstrip("/") if remote_mount_prefix else None
 
@@ -300,8 +295,6 @@ class WebSocketHandleFactory(HandleFactory):
             url=self.url,
             headers=self.headers,
             connect_timeout=self.connect_timeout,
-            reconnect_delay=self.reconnect_delay,
-            max_reconnect_attempts=self.max_reconnect_attempts,
         )
 
 

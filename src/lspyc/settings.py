@@ -11,8 +11,6 @@ FactoryTypes: TypeAlias = Literal["native", "docker", "ws", "auto", "file"]
 class WsHandleSettings(BaseSettings):
     base_url: str = "ws://localhost:8080"
     connect_timeout: float = 10.0
-    reconnect_delay: float = 1.0
-    max_reconnect_attempts: int = -1
     local_mount_prefix: str | None = None
     remote_mount_prefix: str | None = None
 
@@ -56,6 +54,9 @@ class LspycSettings(BaseSettings):
     }
 
     factory_ty: FactoryTypes = "auto"
+
+    max_retries: int = 3
+    """Maximum number of retries for LSP requests on connection errors"""
 
     docker_factory: DockerHandleSettings = DockerHandleSettings()
 

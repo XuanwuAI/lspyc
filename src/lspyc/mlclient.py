@@ -509,6 +509,7 @@ class MutilLangClient:
 
     async def _restart_handle(self, language: str) -> None:
         """Restart the handle for a language after a connection failure."""
+        logger.warning(f"Restarting LSP handle for {language}")
         # 1. Stop old handle (best-effort)
         old_handle = self._handles.pop(language, None)
         if old_handle:
@@ -681,6 +682,7 @@ class MutilLangClient:
                 timeout=self._settings.quiescence_timeout
                 * 10,
             )
+            logger.info(f"Initialized LSP server for {language}")
             return handle
 
     async def _get_handle_for_file(self, file_path: str) -> LspHandle:

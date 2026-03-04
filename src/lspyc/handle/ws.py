@@ -1,6 +1,7 @@
 """WebSocket transport for LSP servers."""
 
 import asyncio
+import logging
 from typing import Awaitable, Callable
 
 import websockets
@@ -8,6 +9,8 @@ from websockets.asyncio.client import ClientConnection
 from websockets.exceptions import ConnectionClosed
 
 from .base import HandleUnavailableError, LspTransport
+
+logger = logging.getLogger(__name__)
 
 
 class WsTransport(LspTransport):
@@ -42,6 +45,7 @@ class WsTransport(LspTransport):
             timeout=self._connect_timeout,
         )
         self._running = True
+        logger.info(f"WebSocket transport connected: {self._url}")
         self._reader_task = asyncio.create_task(
             self._read_messages(on_data, on_close)
         )
@@ -62,6 +66,7 @@ class WsTransport(LspTransport):
             except asyncio.TimeoutError:
                 pass
             self._websocket = None
+        logger.info(f"WebSocket transport stopped: {self._url}")
 
     async def write(self, data: bytes) -> None:
         if self._websocket is None:

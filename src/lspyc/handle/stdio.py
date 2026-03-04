@@ -1,10 +1,13 @@
 """Stdio transport for LSP servers via subprocess."""
 
 import asyncio
+import logging
 from asyncio.subprocess import Process
 from typing import Awaitable, Callable
 
 from .base import HandleUnavailableError, LspTransport
+
+logger = logging.getLogger(__name__)
 
 
 class StdioTransport(LspTransport):
@@ -30,6 +33,7 @@ class StdioTransport(LspTransport):
     ) -> None:
         assert self._process is None or self._process.returncode is None
 
+        logger.info(f"Starting stdio transport: {' '.join(self._command)}")
         self._process = await asyncio.create_subprocess_exec(
             *self._command,
             stdin=asyncio.subprocess.PIPE,
@@ -58,11 +62,15 @@ class StdioTransport(LspTransport):
                 self._process.terminate()
                 try:
                     await asyncio.wait_for(self._process.wait(), timeout=timeout)
+                    logger.info(f"Stdio transport stopped gracefully: {self._command[0]}")
                 except asyncio.TimeoutError:
                     self._process.kill()
                     await self._process.wait()
+                    logger.info(f"Stdio transport force-killed: {self._command[0]}")
+            else:
+                logger.info(f"Stdio transport already exited: {self._command[0]}")
         except ProcessLookupError:
-            pass
+            logger.info(f"Stdio transport already exited: {self._command[0]}")
         finally:
             await self._cleanup_tasks()
             self._process = None
@@ -109,5 +117,5 @@ class StdioTransport(LspTransport):
         """Drain stderr to prevent buffer deadlock."""
         if stream is None:
             return
-        while data := await stream.read(4096):
+        while await stream.read(4096):
             pass

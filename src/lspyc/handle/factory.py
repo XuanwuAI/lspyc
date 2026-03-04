@@ -8,8 +8,9 @@ from urllib.parse import urljoin
 
 import websockets
 
-from .base import LspHandle, LspStdioHandle
-from .wshandle import LspWsHandle
+from .base import LspHandle
+from .stdio import StdioTransport
+from .ws import WsTransport
 
 
 class HandleFactory(ABC):
@@ -93,12 +94,12 @@ class NativeHandleFactory(HandleFactory):
         if not is_valid:
             raise RuntimeError(f"Cannot create handle: {error}")
 
-        return LspStdioHandle(
-            cmd=self.command,
+        transport = StdioTransport(
+            command=self.command,
             cwd=self.cwd,
             env=self.env,
-            workspace_root=workspace_root,
         )
+        return LspHandle(workspace_root=workspace_root, transport=transport)
 
 
 class DockerHandleFactory(HandleFactory):
@@ -187,7 +188,7 @@ class DockerHandleFactory(HandleFactory):
         is_valid, error = await self.validate()
         if not is_valid:
             raise RuntimeError(f"Cannot create handle: {error}")
-        
+
         # Build docker run command
         docker_command = [
             "docker",
@@ -204,9 +205,10 @@ class DockerHandleFactory(HandleFactory):
         docker_command.append(self.image)
         docker_command.extend(self.command)
 
-        return LspStdioHandle(
-            cmd=docker_command,
+        transport = StdioTransport(command=docker_command)
+        return LspHandle(
             workspace_root=self.container_workspace,
+            transport=transport,
         )
 
 
@@ -290,11 +292,14 @@ class WebSocketHandleFactory(HandleFactory):
     async def create(self, workspace_root: str) -> LspHandle:
         remapped = self._remap_workspace(workspace_root)
 
-        return LspWsHandle(
-            workspace_root=remapped,
+        transport = WsTransport(
             url=self.url,
             headers=self.headers,
             connect_timeout=self.connect_timeout,
+        )
+        return LspHandle(
+            workspace_root=remapped,
+            transport=transport,
         )
 
 

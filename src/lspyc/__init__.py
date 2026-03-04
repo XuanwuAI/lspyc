@@ -7,11 +7,13 @@ from .factory_builder import (
 from .handle import (
     DockerHandleFactory,
     HandleFactory,
+    HandleUnavailableError,
     LspHandle,
-    LspStdioHandle,
-    LspWsHandle,
+    LspTransport,
     NativeHandleFactory,
+    StdioTransport,
     WebSocketHandleFactory,
+    WsTransport,
 )
 from .handle.protocol import DocumentSymbol, Location
 from .mlclient import MutilLangClient
@@ -21,14 +23,16 @@ from .threaded import ThreadedClient
 __version__ = "0.1.0"
 __all__ = [
     "DocumentSymbol",
+    "HandleUnavailableError",
     "Location",
     "HandleFactory",
     "DockerHandleFactory",
     "NativeHandleFactory",
     "WebSocketHandleFactory",
     "LspHandle",
-    "LspStdioHandle",
-    "LspWsHandle",
+    "LspTransport",
+    "StdioTransport",
+    "WsTransport",
     "LspycSettings",
     "MutilLangClient",
     "ThreadedClient",

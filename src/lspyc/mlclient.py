@@ -6,10 +6,10 @@ import os
 from collections import OrderedDict
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import AsyncIterator, Mapping
+from typing import Any, AsyncIterator, Callable, Mapping
 
 from .factory_builder import build_factories
-from .handle import HandleFactory, LspHandle
+from .handle import HandleFactory, HandleUnavailableError, LspHandle
 from .handle.protocol import DocumentSymbol, JsonRpcMessage, Location
 from .quiescence import QuiescenceTracker
 from .settings import LspycSettings
@@ -87,9 +87,10 @@ class OpenFileManager:
             yield
         finally:
             async with self._cond:
-                self._in_use[uri] -= 1
-                if self._in_use[uri] <= 0:
-                    del self._in_use[uri]
+                if uri in self._in_use:
+                    self._in_use[uri] -= 1
+                    if self._in_use[uri] <= 0:
+                        del self._in_use[uri]
                 self._cond.notify_all()
 
     async def ensure_file_open(
@@ -187,6 +188,20 @@ class OpenFileManager:
         if evicted is not None:
             await self._do_close(evicted)
 
+    async def invalidate_language(self, language: str) -> None:
+        """Clear tracking for a language without sending didClose (old handle is dead)."""
+        async with self._cond:
+            to_remove = [
+                uri for uri, (_, lang) in self._open_files.items() if lang == language
+            ]
+            for uri in to_remove:
+                del self._open_files[uri]
+                # Only clear _in_use if not actively held by a use_file context
+                if self._in_use.get(uri, 0) <= 0:
+                    self._in_use.pop(uri, None)
+            if to_remove:
+                self._cond.notify_all()
+
 
 class MutilLangClient:
     """A multi-language LSP client that manages multiple language servers.
@@ -271,6 +286,8 @@ class MutilLangClient:
             quiescence_timeout=settings.quiescence_timeout,
         )
         self._settings = settings
+        self._restart_locks: dict[str, asyncio.Lock] = {}
+        self._max_retries = settings.max_retries
 
     async def validate_handle_factories(self) -> None:
         """Validate all configured handle factories."""
@@ -288,22 +305,14 @@ class MutilLangClient:
 
         Returns:
             List of document symbols
-
-        Raises:
-            ValueError: If the file type is not supported
-            RuntimeError: If the operation fails
         """
         try:
-            async with self._prepare_query(file_path) as (handle, uri):
-                result: list[DocumentSymbol] = (
-                    await handle.send_request(
-                        method="textDocument/documentSymbol",
-                        params={"textDocument": {"uri": uri}},
-                        timeout=self._settings.lsp_request_timeout,
-                    )
-                    or []
-                )
-                return result
+            result = await self._request_with_retry(
+                file_path=file_path,
+                method="textDocument/documentSymbol",
+                params_builder=lambda h, uri: {"textDocument": {"uri": uri}},
+            )
+            return result or []
         except Exception as e:
             logger.error(
                 f"get_document_symbols failed for {file_path}: {e} ({type(e)})"
@@ -322,30 +331,30 @@ class MutilLangClient:
 
         Returns:
             List of definition locations
-
-        Raises:
-            ValueError: If the file type is not supported
-            RuntimeError: If the operation fails
         """
         try:
-            async with self._prepare_query(file_path) as (handle, uri):
-                result: list[Location] = []
-                _result = await handle.send_request(
-                    method="textDocument/definition",
-                    params={
-                        "textDocument": {"uri": uri},
-                        "position": {"line": line, "character": character},
-                    },
-                    timeout=self._settings.lsp_request_timeout,
-                )
-                # Normalize result to always be a list
-                if _result is None:
-                    return []
-                elif isinstance(_result, list):
-                    result = _result
-                else:
-                    result = [_result]
-                return [self._localize_loc(loc, handle) for loc in result]
+            result = await self._request_with_retry(
+                file_path=file_path,
+                method="textDocument/definition",
+                params_builder=lambda h, uri: {
+                    "textDocument": {"uri": uri},
+                    "position": {"line": line, "character": character},
+                },
+            )
+            # Normalize result to always be a list
+            if result is None:
+                return []
+            elif isinstance(result, list):
+                locs = result
+            else:
+                locs = [result]
+            # Localize using the current handle
+            abs_path = self._resolve_file_path(file_path)
+            language = self._detect_language(abs_path)
+            handle = self._handles.get(language) if language else None  # type: ignore[arg-type]
+            if handle:
+                return [self._localize_loc(loc, handle) for loc in locs]
+            return locs
         except Exception as e:
             logger.error(
                 f"get_definition failed for {file_path} "
@@ -370,26 +379,25 @@ class MutilLangClient:
 
         Returns:
             List of reference locations
-
-        Raises:
-            ValueError: If the file type is not supported
-            RuntimeError: If the operation fails
         """
         try:
-            async with self._prepare_query(file_path) as (handle, uri):
-                result: list[Location] = (
-                    await handle.send_request(
-                        method="textDocument/references",
-                        params={
-                            "textDocument": {"uri": uri},
-                            "position": {"line": line, "character": character},
-                            "context": {"includeDeclaration": include_declaration},
-                        },
-                        timeout=self._settings.lsp_request_timeout,
-                    )
-                    or []
-                )
-                return [self._localize_loc(loc, handle) for loc in result]
+            result = await self._request_with_retry(
+                file_path=file_path,
+                method="textDocument/references",
+                params_builder=lambda h, uri: {
+                    "textDocument": {"uri": uri},
+                    "position": {"line": line, "character": character},
+                    "context": {"includeDeclaration": include_declaration},
+                },
+            )
+            locs: list[Location] = result or []
+            # Localize using the current handle
+            abs_path = self._resolve_file_path(file_path)
+            language = self._detect_language(abs_path)
+            handle = self._handles.get(language) if language else None  # type: ignore[arg-type]
+            if handle:
+                return [self._localize_loc(loc, handle) for loc in locs]
+            return locs
         except Exception as e:
             logger.error(
                 f"get_references failed for {file_path} "
@@ -409,8 +417,7 @@ class MutilLangClient:
 
         for _, handle in self._handles.items():
             try:
-                if handle.is_running:
-                    await handle.stop(timeout=timeout)
+                await handle.stop(timeout=timeout)
             except Exception:
                 # Continue shutting down other servers even if one fails
                 pass
@@ -500,20 +507,80 @@ class MutilLangClient:
         loc["uri"] = Path(self._resolve_file_path(rel_path)).as_uri()
         return loc
 
-    @asynccontextmanager
-    async def _prepare_query(self, file_path: str) -> AsyncIterator[tuple[LspHandle, str]]:
+    async def _restart_handle(self, language: str) -> None:
+        """Restart the handle for a language after a connection failure."""
+        # 1. Stop old handle (best-effort)
+        old_handle = self._handles.pop(language, None)
+        if old_handle:
+            try:
+                await old_handle.stop()
+            except Exception:
+                pass
+
+        # 2. Close old quiescence tracker
+        old_tracker = self._quiescence_trackers.pop(language, None)
+        if old_tracker:
+            await old_tracker.close()
+
+        # 3. Invalidate open file state (no didClose — handle is dead)
+        await self._file_manager.invalidate_language(language)
+
+        # 4. Clear init lock so _ensure_handle recreates
+        self._initialization_locks.pop(language, None)
+
+        # 5. Recreate via _ensure_handle
+        await self._ensure_handle(language)
+
+    async def _request_with_retry(
+        self,
+        file_path: str,
+        method: str,
+        params_builder: Callable[[LspHandle, str], dict[str, Any]],
+        timeout: float | None = None,
+    ) -> Any:
+        """Send an LSP request with automatic retry on connection failures.
+
+        Non-retryable errors (TimeoutError, LSP errors) propagate immediately.
+        """
+        if timeout is None:
+            timeout = self._settings.lsp_request_timeout
+
         abs_path = self._resolve_file_path(file_path)
         language = self._detect_language(abs_path)
         if language is None:
             raise ValueError(f"Unsupported file type: {file_path}")
-        handle = await self._ensure_handle(language)
-        uri = handle.build_uri(self._get_relative_path(abs_path))
 
-        tracker = self._quiescence_trackers.get(language)
-        async with self._file_manager.use_file(
-            handle, abs_path, uri, language, tracker=tracker
-        ):
-            yield handle, uri
+        if language not in self._restart_locks:
+            self._restart_locks[language] = asyncio.Lock()
+
+        last_error: Exception | None = None
+
+        for attempt in range(self._max_retries + 1):
+            try:
+                handle = await self._ensure_handle(language)
+                uri = handle.build_uri(self._get_relative_path(abs_path))
+                tracker = self._quiescence_trackers.get(language)
+
+                async with self._file_manager.use_file(
+                    handle, abs_path, uri, language, tracker=tracker
+                ):
+                    return await handle.send_request(
+                        method, params_builder(handle, uri), timeout
+                    )
+
+            except HandleUnavailableError as e:
+                last_error = e
+
+            # Non-retryable errors (TimeoutError, LSP errors) propagate naturally
+
+            if attempt < self._max_retries:
+                logger.warning(
+                    f"Retryable error on {method} (attempt {attempt + 1}): {last_error}"
+                )
+                async with self._restart_locks[language]:
+                    await self._restart_handle(language)
+
+        raise last_error  # type: ignore[misc]
 
     def _detect_language(self, file_path: str) -> str | None:
         """Detect the language ID from a file path.
@@ -576,7 +643,6 @@ class MutilLangClient:
 
         Raises:
             ValueError: If no factory is configured for the language
-            RuntimeError: If factory validation fails or handle creation fails
         """
         if language not in self._initialization_locks:
             self._initialization_locks[language] = asyncio.Lock()
@@ -607,11 +673,13 @@ class MutilLangClient:
             self._quiescence_trackers[language] = tracker
             self._handles[language] = handle
             await handle.start()
+            await handle.initialize(workspace_root=handle._workspace_root)
             # Wait for server to finish initial indexing
             await tracker.wait_for_quiescence(
                 # Give a long timeout for initialization
                 # Some lsp server (jdtls) requires a long time to index
-                timeout=self._settings.quiescence_timeout * 10,
+                timeout=self._settings.quiescence_timeout
+                * 10,
             )
             return handle
 
@@ -626,7 +694,6 @@ class MutilLangClient:
 
         Raises:
             ValueError: If the file type is not supported
-            RuntimeError: If the server fails to start or initialize
         """
         language = self._detect_language(file_path)
         if language is None:

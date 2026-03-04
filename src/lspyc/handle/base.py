@@ -1,4 +1,4 @@
-"""Abstract base class for LSP server handle."""
+"""LSP handle with transport abstraction."""
 
 import asyncio
 import os
@@ -6,33 +6,76 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any, Awaitable, Callable, TypeAlias
 
-from .process import ProcessManager, ServerState
 from .protocol import JsonRpcMessage, decode_message, encode_message
 
 INBOUND_HANDLER: TypeAlias = Callable[["LspHandle", JsonRpcMessage], Awaitable[None]]
 
 
-class LspHandle(ABC):
-    """Abstract base class for LSP server handles.
+class HandleUnavailableError(Exception):
+    """Raised when an LSP handle's connection is lost or unusable.
 
-    This class provides common JSON-RPC functionality for all LSP handles,
-    regardless of the underlying transport mechanism (stdio, HTTP, WebSocket, etc.).
-    Subclasses must implement transport-specific methods for starting, stopping,
-    and sending raw data.
+    The client should discard this handle and create a new one.
+    """
+
+
+class LspTransport(ABC):
+    """Abstract byte-level I/O for an LSP server connection."""
+
+    @abstractmethod
+    async def start(
+        self,
+        on_data: Callable[[bytes], Awaitable[None]],
+        on_close: Callable[[], None],
+    ) -> None:
+        """Start the transport.
+
+        Args:
+            on_data: Called when bytes arrive from the server.
+            on_close: Called when the connection drops unexpectedly.
+        """
+
+    @abstractmethod
+    async def stop(self, timeout: float = 5.0) -> None:
+        """Stop the transport gracefully.
+
+        Args:
+            timeout: Maximum time to wait for graceful shutdown.
+        """
+
+    @abstractmethod
+    async def write(self, data: bytes) -> None:
+        """Write bytes to the server.
+
+        Raises:
+            HandleUnavailableError: If the transport is dead.
+        """
+
+
+class LspHandle:
+    """Concrete LSP handle owning JSON-RPC protocol logic.
+
+    Delegates byte-level I/O to an ``LspTransport``. Owns the Content-Length
+    deframing buffer, request/response correlation, and the LSP
+    initialize/initialized handshake.
     """
 
     def __init__(
         self,
         workspace_root: str,
+        transport: LspTransport,
         request_handler: INBOUND_HANDLER | None = None,
         notification_handler: INBOUND_HANDLER | None = None,
     ) -> None:
         self._workspace_root = workspace_root
+        self._transport = transport
         self._server_capabilities: dict[str, Any] | None = None
         self._next_id = 1
         self._pending_responses: dict[int | str, asyncio.Future[Any]] = {}
         self.request_handler: INBOUND_HANDLER | None = request_handler
         self.notification_handler: INBOUND_HANDLER | None = notification_handler
+        self._buffer = b""
+
+    # --- URI helpers ---
 
     def build_uri(self, relative_path: str) -> str:
         assert not relative_path.startswith("/") or relative_path.startswith("..")
@@ -45,50 +88,22 @@ class LspHandle(ABC):
         workspace = Path(self._workspace_root)
         return str(path.relative_to(workspace))
 
-    @abstractmethod
+    # --- Lifecycle ---
+
     async def start(self) -> None:
-        """Start the LSP server/connection.
+        """Start the underlying transport."""
+        self._buffer = b""
+        await self._transport.start(
+            on_data=self._on_data,
+            on_close=self._on_close,
+        )
 
-        Raises:
-            RuntimeError: If the server is already running
-        """
-        pass
-
-    @abstractmethod
     async def stop(self, timeout: float = 5.0) -> None:
-        """Stop the LSP server/connection.
+        """Stop the underlying transport and cancel pending requests."""
+        self._cancel_pending_responses()
+        await self._transport.stop(timeout=timeout)
 
-        Args:
-            timeout: Maximum time to wait for graceful shutdown
-
-        Raises:
-            RuntimeError: If the server is not running
-        """
-        pass
-
-    @abstractmethod
-    async def _send_raw_message(self, message: dict[str, Any]) -> None:
-        """Send a raw message through the transport layer.
-
-        Args:
-            message: The message to send
-
-        Raises:
-            RuntimeError: If the connection is not active
-        """
-        pass
-
-    @property
-    @abstractmethod
-    def state(self) -> ServerState:
-        """Get the current server state."""
-        pass
-
-    @property
-    @abstractmethod
-    def is_running(self) -> bool:
-        """Check if the server is currently running."""
-        pass
+    # --- Sending ---
 
     async def send_request(
         self,
@@ -96,23 +111,8 @@ class LspHandle(ABC):
         params: Any = None,
         timeout: float | None = None,
     ) -> Any:
-        """Send a JSON-RPC request and wait for the response.
-
-        Args:
-            method: The method name
-            params: The method parameters (optional)
-            timeout: Maximum time to wait for response (optional)
-
-        Returns:
-            The result from the response
-
-        Raises:
-            RuntimeError: If the server is not running
-            asyncio.TimeoutError: If the response times out
-            Exception: If the server returns an error
-        """
-        if not self.is_running:
-            raise RuntimeError("Server is not running")
+        """Send a JSON-RPC request and wait for the response."""
+        assert self._transport
 
         request_id = self._next_id
         self._next_id += 1
@@ -125,15 +125,12 @@ class LspHandle(ABC):
         if params is not None:
             message["params"] = params
 
-        # Create future for response
         future: asyncio.Future[Any] = asyncio.Future()
         self._pending_responses[request_id] = future
 
         try:
-            # Send request
             await self._send_raw_message(message)
 
-            # Wait for response
             if timeout is not None:
                 result = await asyncio.wait_for(future, timeout=timeout)
             else:
@@ -141,25 +138,15 @@ class LspHandle(ABC):
 
             return result
 
-        except asyncio.TimeoutError:
-            # Clean up on timeout
+        except (asyncio.TimeoutError, HandleUnavailableError):
             self._pending_responses.pop(request_id, None)
             raise
 
     async def send_notification(self, method: str, params: Any = None) -> None:
-        """Send a JSON-RPC notification (no response expected).
+        """Send a JSON-RPC notification (no response expected)."""
+        assert self._transport
 
-        Args:
-            method: The method name
-            params: The method parameters (optional)
-
-        Raises:
-            RuntimeError: If the server is not running
-        """
-        if not self.is_running:
-            raise RuntimeError("Server is not running")
-
-        message = {
+        message: dict[str, Any] = {
             "jsonrpc": "2.0",
             "method": method,
         }
@@ -174,27 +161,14 @@ class LspHandle(ABC):
         result: Any = None,
         error: dict[str, Any] | None = None,
     ) -> None:
-        """Send a JSON-RPC response to a request.
-
-        Args:
-            request_id: The ID of the request being responded to
-            result: The result value (optional if error is provided)
-            error: Error object (optional if result is provided)
-
-        Raises:
-            RuntimeError: If the server is not running
-            ValueError: If both result and error are provided or neither is provided
-        """
-        if not self.is_running:
-            raise RuntimeError("Server is not running")
-
+        """Send a JSON-RPC response to a server request."""
+        assert self._transport
         assert result is None or error is None
 
         message: dict[str, Any] = {
             "jsonrpc": "2.0",
             "id": request_id,
         }
-
         if error is not None:
             message["error"] = error
         else:
@@ -202,47 +176,22 @@ class LspHandle(ABC):
 
         await self._send_raw_message(message)
 
+    # --- LSP handshake ---
+
     async def initialize(
         self,
         workspace_root: str,
         timeout: float = 30.0,
     ) -> dict[str, Any]:
-        """Initialize the LSP server with workspace configuration.
+        """Perform the LSP initialize/initialized handshake."""
+        assert self._transport
 
-        This method performs the LSP initialize/initialized handshake with the server.
-        It should be called after start() and before sending any other requests.
-
-        Args:
-            workspace_root: Absolute path to workspace root directory
-            timeout: Timeout for initialization request in seconds
-
-        Returns:
-            Server capabilities from initialize response
-
-        Raises:
-            RuntimeError: If handle is not running or initialization fails
-        """
-        if not self.is_running:
-            raise RuntimeError("Server is not running")
-
-        # Convert workspace root to URI
         root_uri = Path(workspace_root).as_uri()
 
-        # Construct initialization parameters
         init_params = {
-            "processId": 1,
+            "processId": None,
             "rootUri": root_uri,
-            # Required by pyright (though lsp spec states that rootUri wins over rootPath)
             "rootPath": workspace_root,
-            # TODO: add workspace support
-            # Currently, a bug in pyright that blocks if workspaceFolders is provided
-            # The fix has not been released yet (current version 1.1.408)
-            # "workspaceFolders": [
-            #     {
-            #         "uri": root_uri,
-            #         "name": os.path.basename(workspace_root),
-            #     }
-            # ],
             "capabilities": {
                 "textDocument": {
                     "definition": {},
@@ -252,41 +201,46 @@ class LspHandle(ABC):
                         "symbolKind": {"valueSet": list(range(1, 27))},
                     },
                 },
-                # "workspace": {
-                #     "workspaceFolders": True,
-                #     "symbol": {},
-                # },
                 "window": {"workDoneProgress": True},
             },
         }
 
-        # Send initialize request
         result = await self.send_request(
             method="initialize",
             params=init_params,
             timeout=timeout,
         )
 
-        # Send initialized notification
         await self.send_notification(method="initialized", params={})
-
-        # Return server capabilities
         return result if result else {}
 
-    async def _handle_message(self, message: JsonRpcMessage) -> None:
-        """Handle an incoming message.
+    # --- Internal ---
 
-        Args:
-            message: The decoded message
-        """
+    async def _send_raw_message(self, message: dict[str, Any]) -> None:
+        encoded = encode_message(message)
+        await self._transport.write(encoded)
+
+    async def _on_data(self, data: bytes) -> None:
+        """Called by the transport when bytes arrive."""
+        self._buffer += data
+
+        while True:
+            message, self._buffer = decode_message(self._buffer)
+            if message is None:
+                break
+            await self._handle_message(message)
+
+    def _on_close(self) -> None:
+        """Called by the transport when the connection drops."""
+        self._cancel_pending_responses()
+
+    async def _handle_message(self, message: JsonRpcMessage) -> None:
         content = message.content
 
-        # Handle response
         if message.is_response:
             request_id = content.get("id")
             if request_id in self._pending_responses:
                 future = self._pending_responses.pop(request_id)
-
                 if "error" in content:
                     error = content["error"]
                     future.set_exception(
@@ -295,7 +249,6 @@ class LspHandle(ABC):
                 else:
                     future.set_result(content.get("result"))
 
-        # Handle request
         elif message.is_request:
             if self.request_handler is not None:
                 await self.request_handler(self, message)
@@ -307,130 +260,12 @@ class LspHandle(ABC):
                     error={"code": -32603, "message": "Internal error"},
                 )
 
-        # Handle notification
         elif message.is_notification and self.notification_handler is not None:
             await self.notification_handler(self, message)
 
     def _cancel_pending_responses(self) -> None:
-        """Cancel all pending responses"""
+        """Cancel all pending responses with HandleUnavailableError."""
         for future in self._pending_responses.values():
             if not future.done():
-                future.cancel()
+                future.set_exception(HandleUnavailableError("LSP connection lost"))
         self._pending_responses.clear()
-
-
-class LspStdioHandle(LspHandle):
-    """Base class for LSP servers communicating via stdio.
-
-    The class handles process lifecycle, message encoding/decoding, and
-    request/response correlation via the stdio transport.
-    """
-
-    def __init__(
-        self,
-        cmd: list[str],
-        workspace_root: str,
-        cwd: str | None = None,
-        env: dict[str, str] | None = None,
-    ) -> None:
-        """Initialize the LSP server.
-
-        Args:
-            cmd: Command and arguments to launch the LSP server
-            workspace_root: workspace root for automatic initialization
-            cwd: Working directory for the server process
-            env: Environment variables for the server process
-        """
-        super().__init__(workspace_root=workspace_root)
-        self._cmd = cmd
-        self._process: ProcessManager | None = None
-        self._cwd = cwd
-        self._env = env
-        self._buffer = b""
-
-    async def start(self) -> None:
-        """Start the LSP server process.
-
-        Raises:
-            RuntimeError: If the server is already running
-            OSError: If the process fails to start
-        """
-        if self._process is not None and self._process.is_running:
-            raise RuntimeError("Server is already running")
-
-        self._process = ProcessManager(self._cmd, cwd=self._cwd, env=self._env)
-
-        await self._process.start(
-            on_stdout=self._on_stdout,
-            on_stderr=self._on_stderr,
-        )
-
-    async def stop(self, timeout: float = 5.0) -> None:
-        """Stop the LSP server process.
-
-        Args:
-            timeout: Maximum time to wait for graceful shutdown
-
-        Raises:
-            RuntimeError: If the server is not running
-        """
-        if self._process is None:
-            raise RuntimeError("Server is not running")
-
-        # Cancel all pending responses
-        self._cancel_pending_responses()
-
-        await self._process.stop(timeout=timeout)
-
-    async def _send_raw_message(self, message: dict[str, Any]) -> None:
-        """Send a raw message through the stdio transport.
-
-        Args:
-            message: The message to send
-
-        Raises:
-            RuntimeError: If the server is not running
-        """
-        if self._process is None:
-            raise RuntimeError("Server is not running")
-
-        encoded = encode_message(message)
-        await self._process.write(encoded)
-
-    @property
-    def state(self) -> ServerState:
-        """Get the current server state."""
-        if self._process is None:
-            return ServerState.STOPPED
-        return self._process.state
-
-    @property
-    def is_running(self) -> bool:
-        """Check if the server is currently running."""
-        return self._process is not None and self._process.is_running
-
-    async def _on_stdout(self, data: bytes) -> None:
-        """Handle data from server stdout.
-
-        Args:
-            data: Raw data from stdout
-        """
-        self._buffer += data
-
-        # Try to decode messages from buffer
-        while True:
-            message, self._buffer = decode_message(self._buffer)
-            if message is None:
-                break
-
-            await self._handle_message(message)
-
-    async def _on_stderr(self, data: bytes) -> None:
-        """Handle data from server stderr.
-
-        Args:
-            data: Raw data from stderr
-        """
-        # Default implementation does nothing with stderr
-        # Subclasses can override to handle stderr output
-        pass

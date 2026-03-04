@@ -42,7 +42,6 @@ async def main_test(handle: LspHandle):
     handle.notification_handler = example_message_handler
     try:
         await handle.start()
-        print(f"Handle (state: {handle.state})")
 
         # Send an initialize request
         print("\nSending initialize request...")
@@ -77,6 +76,6 @@ async def main_test(handle: LspHandle):
     finally:
         print("\nClosing handle...")
         await handle.stop()
-        print(f"Handle closed (state: {handle.state})")
+        print(f"Handle closed")
 
     pass

@@ -1,6 +1,6 @@
 """LSP Server handle module."""
 
-from .base import LspHandle, LspStdioHandle
+from .base import HandleUnavailableError, LspHandle, LspTransport
 from .factory import (
     AutoHandleFactory,
     DockerHandleFactory,
@@ -8,12 +8,15 @@ from .factory import (
     NativeHandleFactory,
     WebSocketHandleFactory,
 )
-from .wshandle import LspWsHandle
+from .stdio import StdioTransport
+from .ws import WsTransport
 
 __all__ = [
+    "HandleUnavailableError",
     "LspHandle",
-    "LspStdioHandle",
-    "LspWsHandle",
+    "LspTransport",
+    "StdioTransport",
+    "WsTransport",
     "HandleFactory",
     "NativeHandleFactory",
     "DockerHandleFactory",

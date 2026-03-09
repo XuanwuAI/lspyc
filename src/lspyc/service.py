@@ -129,22 +129,13 @@ class ClientConnection:
         # Terminate process
         if self.process:
             if self.process.returncode is not None:
-                logger.error(
-                    f"[Client {self.client_id}] terminated with returncode {self.process.returncode}"
-                )
-            else:
-                try:
-                    self.process.terminate()
-                    await asyncio.wait_for(self.process.wait(), timeout=5.0)
-                    logger.info(f"[Client {self.client_id}] Process terminated")
-                except asyncio.TimeoutError:
-                    logger.warning(
-                        f"[Client {self.client_id}] Process didn't terminate, killing"
+                if self.process.returncode != 0:
+                    logger.error(
+                        f"[Client {self.client_id}] terminated with returncode {self.process.returncode}"
                     )
-                    self.process.kill()
-                    await self.process.wait()
-                except Exception as e:
-                    logger.warning(f"[Client {self.client_id}] Error stopping process: {e}")
+            else:
+                self.process.kill()
+            await self.process.wait()
 
         # Close WebSocket
         try:
